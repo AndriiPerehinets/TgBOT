@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sv/bot"
 	"sv/types"
@@ -27,13 +28,13 @@ func RunCMD(bot *bot.Bot) {
 			logger.Fatal("Program ended due to end command execution")
 		}
 
-		param, exist := Comand_To_Type_Map[command]
+		com, exist := CommandBuilder[command]
 		if exist == false {
-			logger.Println(fmt.Errorf("Invalid command"))
+			logger.Println("Invalid command")
 			continue
 		}
 
-		param.InitByUser()
+		param := com()
 
 		err = bot.DoCMDCommand(command, param)
 		if err != nil {
@@ -42,9 +43,55 @@ func RunCMD(bot *bot.Bot) {
 	}
 }
 
-var Comand_To_Type_Map = map[string]types.InputStruct{
-	"sendmessage":       &types.SendText{},
-	"sendsticker":       &types.SendSticker{},
-	"deletemessage":     &types.DeleteMessage{},
-	"deletelastmessage": &types.DeleteMessage{},
+var CommandBuilder = map[string]func() types.InputStruct{
+	"sendmessage": func() types.InputStruct {
+		return &types.SendText{
+			Chat_ID: readInputInt64("Type in ChatID"),
+			Text:    readInput("Type in Text"),
+		}
+	},
+	"sendsticker": func() types.InputStruct {
+		return &types.SendSticker{
+			Chat_ID: readInputInt64("Type in ChatID"),
+			Sticker: readInput("Type in Sticker"),
+		}
+	},
+	"deletemessage": func() types.InputStruct {
+		return &types.DeleteMessage{
+			Chat_ID:   readInputInt64("Type in ChatID"),
+			MessageID: readInputInt64("Type in MessageID (if you are using DeleteLastMessage method just type in anything or press Enter)"),
+		}
+	},
+	"deletelastmessage": func() types.InputStruct {
+		return &types.DeleteMessage{
+			Chat_ID:   readInputInt64("Type in ChatID"),
+			MessageID: readInputInt64("Type in MessageID (if you are using DeleteLastMessage method just type in anything or press Enter)"),
+		}
+	},
+}
+
+func readInput(prompt string) string {
+	log.Println(prompt)
+
+	reader := bufio.NewReader(os.Stdin)
+
+	input, _ := reader.ReadString('\n')
+
+	input = strings.TrimSpace(input)
+
+	return input
+}
+
+func readInputInt64(prompt string) int64 {
+	for {
+		res := readInput(prompt)
+
+		number, err := strconv.ParseInt(res, 10, 64)
+		if err != nil {
+			log.Println("type in a number")
+			continue
+		}
+
+		return number
+	}
 }

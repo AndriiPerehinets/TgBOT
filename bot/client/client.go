@@ -38,35 +38,27 @@ func (c *Client) GetMe() (*types.User, error) {
 		return nil, fmt.Errorf("Can't create request %w ", err)
 	}
 
-	resp, err := c.client.Do(req) ////////////////////////повертає структуру ok, result а не юзера
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("Error during request execution %w", err)
 	}
 
+	respStruct := &types.GetMeResponse{}
+
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(resp.Body)
+	err = json.NewDecoder(resp.Body).Decode(respStruct)
 	if err != nil {
-		return nil, fmt.Errorf("Can't read data from responses body %w", err)
+		return nil, fmt.Errorf("Can't read decode response: %w", err)
 	}
 
-	var tgResponse struct {
-		Ok     bool        `json:"ok"`
-		Result *types.User `json:"result"`
+	if !respStruct.Ok {
+		return nil, fmt.Errorf("Error during GetMe execution bad response: %t", respStruct.Ok)
 	}
 
-	err = json.Unmarshal(data, &tgResponse)
-	if err != nil {
-		return nil, fmt.Errorf("Can't unmarshal respoce %w", err)
-	}
+	U := respStruct.Result
 
-	if !tgResponse.Ok {
-		return nil, fmt.Errorf("Error during GetMe execution bad response: %t", tgResponse.Ok)
-	}
-
-	U := tgResponse.Result
-
-	return U, nil
+	return &U, nil
 }
 
 func (c *Client) Send(method string, Param types.InputStruct) (*types.Message, error) {
@@ -87,7 +79,7 @@ func (c *Client) Send(method string, Param types.InputStruct) (*types.Message, e
 
 	c.logger.Println("Opperation " + method + " was successfully completed")
 
-	return &A.Response, nil
+	return &A.Result, nil
 }
 
 func (c *Client) DeleteMessage(param *types.DeleteMessage) error {
@@ -159,5 +151,5 @@ func (c *Client) GetUpdate(offset int64) ([]types.Update, error) {
 		return nil, fmt.Errorf("Bad response, A.Ok = %t", A.Ok)
 	}
 
-	return A.Response, nil
+	return A.Result, nil
 }

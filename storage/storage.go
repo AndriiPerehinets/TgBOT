@@ -355,7 +355,7 @@ func (S *Storage) InsertTrigger(message *types.Message) error {
 func (S *Storage) AddTriggerResponse(message *types.Message) error {
 	var IsSticker = false
 	if message.Sticker.FileID != "" {
-		IsSticker = true //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+		IsSticker = true
 	}
 
 	query := `

@@ -1,13 +1,18 @@
 package types
 
+type GetMeResponse struct {
+	Ok     bool `json:"ok"`
+	Result User `json:"result"`
+}
+
 type SendResponse struct {
-	Ok       bool    `json:"ok"`
-	Response Message `json:"result"`
+	Ok     bool    `json:"ok"`
+	Result Message `json:"result"`
 }
 
 type GetUpdateResponse struct {
-	Ok       bool     `json:"ok"`
-	Response []Update `json:"result"`
+	Ok     bool     `json:"ok"`
+	Result []Update `json:"result"`
 }
 
 type Update struct {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sv/bot/client"
 	"sv/storage"
 	"sv/types"
@@ -193,9 +194,10 @@ func (b *Bot) Fetch() {
 
 func (b *Bot) IsCommand(Message *types.Message) (commad func(), ok bool) {
 	var CommandList = map[string](func()){
-		"AddTrigger": func() { b.AddExpectedTrigger(Message) },
+		"addtrigger": func() { b.AddExpectedTrigger(Message) },
 	}
 
+	Message.Text = strings.TrimPrefix(strings.TrimSpace(strings.ToLower(Message.Text)), "/")
 	c, ok := CommandList[Message.Text]
 	if !ok {
 		return nil, ok

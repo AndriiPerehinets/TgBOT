@@ -50,21 +50,21 @@ func (c *Client) GetMe() (*types.User, error) {
 		return nil, fmt.Errorf("Can't read data from responses body %w", err)
 	}
 
-	var tgResponce struct {
+	var tgResponse struct {
 		Ok     bool        `json:"ok"`
 		Result *types.User `json:"result"`
 	}
 
-	err = json.Unmarshal(data, &tgResponce)
+	err = json.Unmarshal(data, &tgResponse)
 	if err != nil {
 		return nil, fmt.Errorf("Can't unmarshal respoce %w", err)
 	}
 
-	if !tgResponce.Ok {
-		return nil, fmt.Errorf("Error during GetMe execution bad response: %t", tgResponce.Ok)
+	if !tgResponse.Ok {
+		return nil, fmt.Errorf("Error during GetMe execution bad response: %t", tgResponse.Ok)
 	}
 
-	U := tgResponce.Result
+	U := tgResponse.Result
 
 	return U, nil
 }
@@ -82,12 +82,12 @@ func (c *Client) Send(method string, Param types.InputStruct) (*types.Message, e
 	}
 
 	if !A.Ok {
-		return nil, fmt.Errorf("Error during Send execution bad responce, A.Ok = %t", A.Ok)
+		return nil, fmt.Errorf("Error during Send execution bad response, A.Ok = %t", A.Ok)
 	}
 
 	c.logger.Println("Opperation " + method + " was successfully completed")
 
-	return &A.Responce, nil
+	return &A.Response, nil
 }
 
 func (c *Client) DeleteMessage(param *types.DeleteMessage) error {
@@ -101,7 +101,7 @@ func (c *Client) DeleteMessage(param *types.DeleteMessage) error {
 	return nil
 }
 
-func (c *Client) doPostRequest(method string, param types.InputStruct) (responce []byte, err error) {
+func (c *Client) doPostRequest(method string, param types.InputStruct) (response []byte, err error) {
 	p, err := json.Marshal(param)
 	if err != nil {
 		return nil, fmt.Errorf("Paraments can't be marshalled, %w", err)
@@ -132,7 +132,7 @@ func (c *Client) doPostRequest(method string, param types.InputStruct) (responce
 		return nil, fmt.Errorf("StatusCode is not OK, it is:  %s, %s", resp.Status, string(data))
 	}
 
-	c.logger.Println("Responce data:\t", string(data))
+	c.logger.Println("Response data:\t", string(data))
 
 	return data, nil
 }
@@ -152,12 +152,12 @@ func (c *Client) GetUpdate(offset int64) ([]types.Update, error) {
 
 	err = json.Unmarshal(resp, A)
 	if err != nil {
-		return nil, fmt.Errorf("Can't unmarshal reponce %w", err)
+		return nil, fmt.Errorf("Can't unmarshal response %w", err)
 	}
 
 	if !A.Ok {
-		return nil, fmt.Errorf("Bad responce, A.Ok = %t", A.Ok)
+		return nil, fmt.Errorf("Bad response, A.Ok = %t", A.Ok)
 	}
 
-	return A.Responce, nil
+	return A.Response, nil
 }

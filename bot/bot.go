@@ -132,7 +132,7 @@ func (b *Bot) Fetch() {
 			}
 
 			if expected {
-				IsTrigger, IsTriggerResponce, err := b.Storage.GetExpectedMessageStatus(&u.Message)
+				IsTrigger, IsTriggerResponse, err := b.Storage.GetExpectedMessageStatus(&u.Message)
 				if err != nil {
 					b.Logger.Println(err)
 					b.SendText(&u.Message, "Sorry, an error occured")
@@ -168,13 +168,13 @@ func (b *Bot) Fetch() {
 					continue
 				}
 
-				if IsTriggerResponce {
+				if IsTriggerResponse {
 					err := b.Storage.DeleteExpectedMessage(&u.Message)
 					if err != nil {
 						b.Logger.Println(err)
 						b.SendText(&u.Message, "Sorry, an error occured")
 					}
-					err = b.Storage.AddTriggerResponce(&u.Message)
+					err = b.Storage.AddTriggerResponse(&u.Message)
 					if err != nil {
 						b.Logger.Println(err)
 						b.SendText(&u.Message, "Sorry, an error occured")

@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"bufio"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-var MessageStorage []types.Message
 var logger = log.New(os.Stdout, "Storage log:\t", log.Lshortfile|log.LstdFlags)
 
 type Storage struct {
@@ -30,23 +28,9 @@ func NewStorage(db *sql.DB) *Storage {
 }
 
 func SetUpStorage() *sql.DB {
-	var password string
-
-	for {
-		logger.Println("Type in data base password:")
-
-		buf := bufio.NewReader(os.Stdin)
-
-		var err error
-		password, err = buf.ReadString('\n')
-
-		if err != nil {
-			logger.Fatal("Invalid format of a password")
-			continue
-		}
-		password = strings.TrimSpace(password)
-
-		break
+	password := os.Getenv("POSTGRES_PASSWORD")
+	if password == "" {
+		logger.Fatal("POSTGRES_PASSWORD is uninitialized inside .env file")
 	}
 
 	dsn := "postgres://postgres:" + password + "@localhost:5432/postgres"
@@ -262,7 +246,7 @@ func (S *Storage) SelectLastMessage(chatID, botID int64) (*types.DeleteMessage, 
 
 func (S *Storage) InsertExpectedMessage(message *types.Message, IsTrigger, IsTriggerPhrase bool) error {
 	if IsTrigger && IsTriggerPhrase {
-		return fmt.Errorf("Invalid method call Message can't be trigger and trigger responce at the same time")
+		return fmt.Errorf("Invalid method call Message can't be trigger and trigger response at the same time")
 	}
 
 	query := `
@@ -360,7 +344,7 @@ func (S *Storage) InsertTrigger(message *types.Message) error {
 
 	_, err = S.db.Exec(query, message.Chat.ID, message.From.UserID)
 	if err != nil {
-		return fmt.Errorf("Can't change expected message status to IsTriggerResponce: %w", err)
+		return fmt.Errorf("Can't change expected message status to IsTriggerResponse: %w", err)
 	}
 
 	S.logger.Println("Trigger was successfully saved")
@@ -368,7 +352,7 @@ func (S *Storage) InsertTrigger(message *types.Message) error {
 	return nil
 }
 
-func (S *Storage) AddTriggerResponce(message *types.Message) error {
+func (S *Storage) AddTriggerResponse(message *types.Message) error {
 	var IsSticker = false
 	if message.Sticker.FileID != "" {
 		IsSticker = true //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -384,12 +368,12 @@ func (S *Storage) AddTriggerResponce(message *types.Message) error {
 
 	_, err := S.db.Exec(query, strings.TrimSpace(message.Text), IsSticker, message.Chat.ID, message.From.UserID)
 	if err != nil {
-		return fmt.Errorf("Can't add trigger responce: %w", err)
+		return fmt.Errorf("Can't add trigger response: %w", err)
 	}
 
 	err = S.DeleteExpectedMessage(message)
 	if err != nil {
-		return fmt.Errorf("Error during adding trigger responce: %w", err)
+		return fmt.Errorf("Error during adding trigger response: %w", err)
 	}
 
 	return nil
@@ -417,7 +401,7 @@ func (S *Storage) GetTriggerResp(message *types.Message) (resp string, IsSticker
 
 	err = S.db.QueryRow(query, message.Chat.ID, strings.TrimSpace(message.Text), message.Sticker.FileID).Scan(&resp, &IsSticker)
 	if err != nil {
-		return "", false, fmt.Errorf("Can't get trigger responce: %w", err)
+		return "", false, fmt.Errorf("Can't get trigger response: %w", err)
 	}
 
 	return resp, IsSticker, nil

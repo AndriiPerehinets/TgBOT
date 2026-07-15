@@ -2,12 +2,12 @@ package types
 
 type SendResponse struct {
 	Ok       bool    `json:"ok"`
-	Responce Message `json:"result"`
+	Response Message `json:"result"`
 }
 
 type GetUpdateResponse struct {
 	Ok       bool     `json:"ok"`
-	Responce []Update `json:"result"`
+	Response []Update `json:"result"`
 }
 
 type Update struct {

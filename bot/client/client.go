@@ -153,3 +153,12 @@ func (c *Client) GetUpdate(offset int64) ([]types.Update, error) {
 
 	return A.Result, nil
 }
+
+// func (c *Client) SetCommands(param *types.BotCommand) error {
+// 	resp, err := c.doPostRequest("setMyCommands", param)
+// 	if err != nil {
+// 		return fmt.Errorf("Can't set bot commands: %w", err)
+// 	}
+
+// 	json.Unmarshal(resp)
+// }

@@ -25,3 +25,17 @@ type GetUpdate struct {
 	Offset  int64 `json:"offset"`
 	Timeout int64 `json:"timeout"`
 }
+
+type BotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
+
+type SetBotCommand struct {
+	Commands []BotCommand `json:"commands"`
+	Scope    Scope        `json:"scope"`
+}
+
+type Scope struct {
+	Type string `json:"type"`
+}

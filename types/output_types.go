@@ -5,6 +5,11 @@ type GetMeResponse struct {
 	Result User `json:"result"`
 }
 
+type TgResponse struct {
+	Ok     bool `json:"ok"`
+	Result any  `json:"result"`
+}
+
 type SendResponse struct {
 	Ok     bool    `json:"ok"`
 	Result Message `json:"result"`

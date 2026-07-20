@@ -38,7 +38,7 @@ func RunCMD(bot *bot.Bot) {
 
 		err = bot.DoCMDCommand(command, param)
 		if err != nil {
-			logger.Println(fmt.Errorf("During command execution occurred an error:%w", err))
+			logger.Println(fmt.Errorf("During %s execution occurred an error: %w", command, err))
 		}
 	}
 }

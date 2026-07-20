@@ -154,11 +154,76 @@ func (c *Client) GetUpdate(offset int64) ([]types.Update, error) {
 	return A.Result, nil
 }
 
-// func (c *Client) SetCommands(param *types.BotCommand) error {
-// 	resp, err := c.doPostRequest("setMyCommands", param)
-// 	if err != nil {
-// 		return fmt.Errorf("Can't set bot commands: %w", err)
-// 	}
+func (c *Client) SetCommands() error {
+	param := &types.SetBotCommand{
+		Commands: []types.BotCommand{
+			{
+				Command:     "add_trigger",
+				Description: "Adds a new trigger. Whenever the trigger message is sent, the bot will respond with a predefined by user message",
+			},
+			{
+				Command:     "delete_trigger",
+				Description: "Deletes an existing trigger, only creator of trigger or administrator may execute it",
+			},
+		},
+		Scope: types.Scope{
+			Type: "all_private_chats",
+		},
+	}
+	resp, err := c.doPostRequest("setMyCommands", param)
+	if err != nil {
+		return fmt.Errorf("Can't set bot commands: %w", err)
+	}
 
-// 	json.Unmarshal(resp)
-// }
+	A := &types.SetCommandsResponse{}
+	err = json.Unmarshal(resp, A)
+	if err != nil {
+		return fmt.Errorf("Can't unmarhsal respose: %w", err)
+	}
+
+	if !A.Ok || !A.Result {
+		return fmt.Errorf("An error occurred during SetCommads execution, OK = %t , Result = %t", A.Ok, A.Result)
+	}
+
+	param.Scope.Type = "all_group_chats"
+	param.Commands = append(param.Commands, types.BotCommand{Command: "start", Description: "Starts bot"})
+
+	resp, err = c.doPostRequest("setMyCommands", param)
+	if err != nil {
+		return fmt.Errorf("Can't set bot commands: %w", err)
+	}
+
+	A = &types.SetCommandsResponse{}
+	err = json.Unmarshal(resp, A)
+	if err != nil {
+		return fmt.Errorf("Can't unmarhsal respose: %w", err)
+	}
+
+	if !A.Ok || !A.Result {
+		return fmt.Errorf("An error occurred during SetCommads execution, OK = %t , Result = %t", A.Ok, A.Result)
+	}
+
+	return nil
+}
+
+func (c *Client) IsAdministrator(ChatID int64, UserID int64) (bool, error) {
+	resp, err := c.doPostRequest("getChatAdministrators", ChatID)
+	if err != nil {
+		return false, fmt.Errorf("Can't get chat %d administrators, %w", ChatID, err)
+	}
+
+	A := &types.GetAdministratorsResponse{}
+
+	err = json.Unmarshal(resp, A)
+	if err != nil {
+		return false, fmt.Errorf("Can't unmarshal response %w", err)
+	}
+
+	for _, i := range A.Result {
+		if i.User.UserID == UserID {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}

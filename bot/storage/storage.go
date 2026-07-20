@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sv/bot/utils"
 	"sv/types"
 	"time"
 
@@ -96,7 +97,7 @@ func SetUpStorage() *sql.DB {
 		UserID BIGINT NOT NULL, 
 		UserName VARCHAR(100) NOT NULL,
 		ChatID BIGINT NOT NULL, 
-		Text VARCHAR(1000), 
+		Text VARCHAR(4096), 
 		Sticker VARCHAR(100), 
 		Time TIMESTAMPTZ NOT NULL, 
 		Deleted BOOL NOT NULL,
@@ -115,8 +116,7 @@ func SetUpStorage() *sql.DB {
 		CREATE TABLE IF NOT EXISTS EXPECTED_MESSAGES (
 		ChatID BIGINT NOT NULL,
 		UserID BIGINT NOT NULL,
-		IsTrigger BOOL NOT NULL,
-		IsTriggerResp BOOL NOT NULL,
+		State VARCHAR(50) NOT NULL,
 		CONSTRAINT fk_chatid FOREIGN KEY(ChatID) REFERENCES CHATS(ChatID) ON DELETE CASCADE,
 		CONSTRAINT unique_pair UNIQUE(ChatID, UserID))
 	`
@@ -131,9 +131,9 @@ func SetUpStorage() *sql.DB {
 		CREATE TABLE IF NOT EXISTS TRIGGERS (
 		ChatID BIGINT NOT NULL,
 		UserID BIGINT NOT NULL,
-		TriggerPhrase VARCHAR(1000),
+		TriggerPhrase VARCHAR(4096) NOT NULL,
 		TriggerSticker VARCHAR(100),
-		TriggerResp VARCHAR(1000),
+		TriggerResp VARCHAR(4096),
 		IsRespSticker BOOL,
 		CONSTRAINT unique_identifier UNIQUE(ChatID, TriggerPhrase, TriggerSticker),
 		CONSTRAINT fk_chatid FOREIGN KEY(ChatID) REFERENCES CHATS(ChatID) ON DELETE CASCADE) 
@@ -171,15 +171,13 @@ func (S *Storage) InsertChat(chat *types.Chat) error {
 		return fmt.Errorf("Error during chat insertion: %w", err)
 	}
 
-	S.logger.Println("Chat was successfully inserted")
-
 	return nil
 }
 
 func (S *Storage) InsertMessage(message *types.Message) error {
 	err := S.InsertChat(&message.Chat)
 	if err != nil {
-		return fmt.Errorf("Can't insert message: %w", err)
+		return fmt.Errorf("Can't insert chat for message insertion: %w", err)
 	}
 
 	date := time.Unix(message.Date, 0)
@@ -194,8 +192,6 @@ func (S *Storage) InsertMessage(message *types.Message) error {
 		return fmt.Errorf("Can't insert message: %w", err)
 	}
 
-	S.logger.Println("Message was successfully inserted")
-
 	return nil
 }
 
@@ -209,8 +205,6 @@ func (S *Storage) UpdateMessageStatus(param *types.DeleteMessage) error {
 	if err != nil {
 		return fmt.Errorf("Can't update message status to deleted: %w", err)
 	}
-
-	S.logger.Println("Message was successfully updated")
 
 	return nil
 }
@@ -244,42 +238,35 @@ func (S *Storage) SelectLastMessage(chatID, botID int64) (*types.DeleteMessage, 
 	return resp, nil
 }
 
-func (S *Storage) InsertExpectedMessage(message *types.Message, IsTrigger, IsTriggerPhrase bool) error {
-	if IsTrigger && IsTriggerPhrase {
-		return fmt.Errorf("Invalid method call Message can't be trigger and trigger response at the same time")
-	}
-
+func (S *Storage) InsertExpectedMessage(message *types.Message, state string) error {
 	query := `
-		INSERT INTO EXPECTED_MESSAGES (ChatID, UserId, IsTrigger, IsTriggerResp)
-		VALUES($1, $2, $3, $4)
+		INSERT INTO EXPECTED_MESSAGES (ChatID, UserId, State)
+		VALUES($1, $2, $3)
 		ON CONFLICT(ChatID, UserID) DO NOTHING
 	`
 
-	_, err := S.db.Exec(query, message.Chat.ID, message.From.UserID, IsTrigger, IsTriggerPhrase)
+	_, err := S.db.Exec(query, message.Chat.ID, message.From.UserID, state)
 	if err != nil {
-		return fmt.Errorf("Can't inserted expected trigger: %w", err)
+		return fmt.Errorf("Can't insert trigger to EXPECTED_MESSAGE table: %w", err)
 	}
-
-	S.logger.Println("Expected message was successfully inserted")
 
 	return nil
 }
 
-func (S *Storage) GetExpectedMessageStatus(message *types.Message) (IsTrigger, IsTriggerResp bool, err error) {
+func (S *Storage) GetExpectedMessageState(message *types.Message) (State string, err error) {
 	query := `
 		SELECT 
-			IsTrigger,
-			IsTriggerResp
+			State
 		FROM EXPECTED_MESSAGES
 		WHERE ChatID = $1 AND UserID = $2
 	`
 
-	err = S.db.QueryRow(query, message.Chat.ID, message.From.UserID).Scan(&IsTrigger, &IsTriggerResp)
+	err = S.db.QueryRow(query, message.Chat.ID, message.From.UserID).Scan(&State)
 	if err != nil {
-		return false, false, fmt.Errorf("Error during geting status of expected message: %w", err)
+		return "", fmt.Errorf("Error during getting status of expected message: %w", err)
 	}
 
-	return IsTrigger, IsTriggerResp, nil
+	return State, nil
 }
 
 func (S *Storage) IsExpected(message *types.Message) (bool, error) {
@@ -293,7 +280,7 @@ func (S *Storage) IsExpected(message *types.Message) (bool, error) {
 		return false, fmt.Errorf("Error during checking whether message is expected: %w", err)
 	}
 
-	return exists, err
+	return exists, nil
 }
 
 func (S *Storage) DeleteExpectedMessage(message *types.Message) error {
@@ -304,58 +291,58 @@ func (S *Storage) DeleteExpectedMessage(message *types.Message) error {
 	_, err := S.db.Exec(query, message.Chat.ID, message.From.UserID)
 
 	if err != nil {
-		return fmt.Errorf("Can't delete expected message: %w", err)
+		return fmt.Errorf("Can't delete message from EXPECTED_MESSAGE table: %w", err)
 	}
-
-	S.logger.Println("Message was successfully deleted")
 
 	return nil
 }
 
 func (S *Storage) InsertTrigger(message *types.Message) error {
 	query := `
-		INSERT INTO TRIGGERS (ChatID, UserID, TriggerPhrase, TriggerSticker, IsRespSticker)
-		VALUES($1, $2, $3, $4, $5) 
+		INSERT INTO TRIGGERS (ChatID, UserID, TriggerPhrase, TriggerSticker)
+		VALUES($1, $2, $3, $4) 
 		ON CONFLICT (ChatID, TriggerPhrase, TriggerSticker) DO NOTHING
 		RETURNING 1
 	`
-	var IsSticker = false
-	if message.Sticker.FileID != "" {
-		IsSticker = true
-	}
 
 	var A int
-	err := S.db.QueryRow(query, message.Chat.ID, message.From.UserID, strings.TrimSpace(message.Text), message.Sticker.FileID, IsSticker).Scan(&A)
+	err := S.db.QueryRow(query, message.Chat.ID, message.From.UserID, strings.TrimSpace(message.Text), message.Sticker.FileID).Scan(&A)
 
 	if err != nil {
+		erro := S.DeleteExpectedMessage(message)
+		err = errors.Join(err, erro)
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("Such trigger already exists")
 		}
-		return fmt.Errorf("Can't insert trigger %w", err)
+		return fmt.Errorf("Can't insert trigger: %w", err)
+
 	}
 
 	query = `
 		UPDATE EXPECTED_MESSAGES
 		SET
-			IsTrigger = false,
-			IsTriggerResp = true
+			State = 'TriggerResp'
 		WHERE ChatID = $1 AND UserID = $2
 	`
 
 	_, err = S.db.Exec(query, message.Chat.ID, message.From.UserID)
 	if err != nil {
-		return fmt.Errorf("Can't change expected message status to IsTriggerResponse: %w", err)
+		err = errors.Join(err, utils.ExecuteRollBack(
+			func() error { return S.DeleteExpectedMessage(message) },
+			func() error { return S.DeleteTrigger(message, false) },
+		))
+		return fmt.Errorf("Can't change expected message status to IsTriggerResponse %w", err)
 	}
-
-	S.logger.Println("Trigger was successfully saved")
 
 	return nil
 }
 
 func (S *Storage) AddTriggerResponse(message *types.Message) error {
+	resp := strings.TrimSpace(message.Text)
 	var IsSticker = false
 	if message.Sticker.FileID != "" {
 		IsSticker = true
+		resp = message.Sticker.FileID
 	}
 
 	query := `
@@ -366,13 +353,22 @@ func (S *Storage) AddTriggerResponse(message *types.Message) error {
 		WHERE ChatID = $3 AND UserID = $4 AND TriggerResp IS NULL
 	`
 
-	_, err := S.db.Exec(query, strings.TrimSpace(message.Text), IsSticker, message.Chat.ID, message.From.UserID)
+	_, err := S.db.Exec(query, resp, IsSticker, message.Chat.ID, message.From.UserID)
 	if err != nil {
-		return fmt.Errorf("Can't add trigger response: %w", err)
+		err = errors.Join(err, utils.ExecuteRollBack(
+			func() error { return S.DeleteExpectedMessage(message) },
+			func() error { return S.DeleteTrigger(message, false) },
+		))
+
+		return fmt.Errorf("Can't add trigger reponse %w", err)
 	}
 
 	err = S.DeleteExpectedMessage(message)
 	if err != nil {
+		erro := S.DeleteTrigger(message, false)
+		if erro != nil {
+			return fmt.Errorf("Error during adding trigger response: %w, %w", err, erro)
+		}
 		return fmt.Errorf("Error during adding trigger response: %w", err)
 	}
 
@@ -407,15 +403,20 @@ func (S *Storage) GetTriggerResp(message *types.Message) (resp string, IsSticker
 	return resp, IsSticker, nil
 }
 
-func (S *Storage) DeleteTrigger(message *types.Message) error {
+func (S *Storage) DeleteTrigger(message *types.Message, IsAdmin bool) error {
 	query := `
-		DELETE FROM TRIGGERS WHERE ChatID = $1 AND TriggerPhrase = $2 AND TriggerSticker = $3
+		DELETE FROM TRIGGERS WHERE ChatID = $1 AND ((TriggerPhrase = $2 AND TriggerSticker = $3) OR TriggerResp IS NULL) AND (UserID = $4 OR $5)
 	`
 
-	_, err := S.db.Exec(query, message.Chat.ID, strings.TrimSpace(message.Text), message.Sticker.FileID)
+	resp, err := S.db.Exec(query, message.Chat.ID, strings.TrimSpace(message.Text), message.Sticker.FileID, message.From.UserID, IsAdmin)
+
+	affected, err := resp.RowsAffected()
+	if affected != 1 {
+		return fmt.Errorf("An error occurred during trigger deletion, %d rows affected", affected)
+	}
 
 	if err != nil {
-		return fmt.Errorf("Can'delete trigger message: %w", err)
+		return fmt.Errorf("Can'delete trigger: %w", err)
 	}
 
 	S.logger.Println("Trigger was successfully deleted")

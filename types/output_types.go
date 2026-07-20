@@ -15,9 +15,19 @@ type SendResponse struct {
 	Result Message `json:"result"`
 }
 
+type SetCommandsResponse struct {
+	Ok     bool `json:"ok"`
+	Result bool `json:"result"`
+}
+
 type GetUpdateResponse struct {
 	Ok     bool     `json:"ok"`
 	Result []Update `json:"result"`
+}
+
+type GetAdministratorsResponse struct {
+	Ok     bool                      `json:"ok"`
+	Result []ChatMemberAdministrator `json:"result"`
 }
 
 type Update struct {
@@ -44,4 +54,8 @@ type Chat struct {
 type User struct {
 	UserID   int64  `json:"id"`
 	Username string `json:"username"`
+}
+
+type ChatMemberAdministrator struct {
+	User User `json:"user"`
 }

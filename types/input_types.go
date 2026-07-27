@@ -3,7 +3,10 @@ package types
 type InputStruct interface{}
 
 type Sticker struct {
-	FileID string `json:"file_id"`
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id"`
+	Emoji        string `json:"emoji"`
+	SetName      string `json:"set_name"`
 }
 
 type SendText struct {
@@ -12,8 +15,8 @@ type SendText struct {
 }
 
 type SendSticker struct {
-	Chat_ID int64  `json:"chat_id"`
-	Sticker string `json:"sticker"`
+	Chat_ID       int64  `json:"chat_id"`
+	StickerFileID string `json:"sticker"`
 }
 
 type DeleteMessage struct {

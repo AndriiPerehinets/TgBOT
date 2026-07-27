@@ -92,17 +92,35 @@ func SetUpStorage() *sql.DB {
 	}
 
 	query = `
+		CREATE TABLE IF NOT EXISTS STICKERS (
+			FileUniqueID VARCHAR(100) NOT NULL,
+			FileID VARCHAR(100) NOT NULL,
+			Emoji VARCHAR (20) NOT NULL, 
+			SetName VARCHAR(100) NOT NULL,
+			CONSTRAINT pk_uniqueid PRIMARY KEY(FileUniqueID)
+		)
+	`
+
+	_, err = db.Exec(query)
+	if err != nil {
+		logger.Fatal("Error dutring creation of STICKERS table: ", err)
+	} else {
+		logger.Println("Table STICKER table successfully created")
+	}
+
+	query = `
 		CREATE TABLE IF NOT EXISTS MESSAGES (
 		MessageID BIGINT NOT NULL, 
 		UserID BIGINT NOT NULL, 
 		UserName VARCHAR(100) NOT NULL,
 		ChatID BIGINT NOT NULL, 
 		Text VARCHAR(4096), 
-		Sticker VARCHAR(100), 
+		StickerID VARCHAR(100), 
 		Time TIMESTAMPTZ NOT NULL, 
 		Deleted BOOL NOT NULL,
 		CONSTRAINT pk_message PRIMARY KEY(MessageID),
-		CONSTRAINT fk_chat FOREIGN KEY(ChatID) REFERENCES CHATS(ChatID) ON DELETE CASCADE)
+		CONSTRAINT fk_chat FOREIGN KEY(ChatID) REFERENCES CHATS(ChatID) ON DELETE CASCADE,
+		CONSTRAINT fk_stickerid FOREIGN KEY(StickerID) REFERENCES STICKERS(FileUniqueID) ON DELETE CASCADE)
 		`
 
 	_, err = db.Exec(query)
@@ -131,12 +149,13 @@ func SetUpStorage() *sql.DB {
 		CREATE TABLE IF NOT EXISTS TRIGGERS (
 		ChatID BIGINT NOT NULL,
 		UserID BIGINT NOT NULL,
-		TriggerPhrase VARCHAR(4096) NOT NULL,
-		TriggerSticker VARCHAR(100),
+		Username VARCHAR(100) NOT NULL,
+		TriggerType VARCHAR(20) NOT NULL,
+		Trigger VARCHAR(4096),
 		TriggerResp VARCHAR(4096),
-		IsRespSticker BOOL,
-		CONSTRAINT unique_identifier UNIQUE(ChatID, TriggerPhrase, TriggerSticker),
-		CONSTRAINT fk_chatid FOREIGN KEY(ChatID) REFERENCES CHATS(ChatID) ON DELETE CASCADE) 
+		RespType VARCHAR(20),
+		CONSTRAINT unique_identifier UNIQUE(ChatID, Trigger),
+		CONSTRAINT fk_chat_id FOREIGN KEY(ChatID) REFERENCES CHATS(ChatID) ON DELETE CASCADE)
 	`
 
 	_, err = db.Exec(query)
@@ -157,10 +176,10 @@ func (S *Storage) InsertChat(chat *types.Chat) error {
 	}
 
 	if exists {
-		S.logger.Println("Chat already exitst inside CHATS table")
 		return nil
 	}
 
+	S.logger.Println("New Chat was created")
 	query := `
 		INSERT INTO CHATS (chatid, username, type)
 		VALUES($1, $2, $3)
@@ -174,20 +193,48 @@ func (S *Storage) InsertChat(chat *types.Chat) error {
 	return nil
 }
 
+func (S *Storage) InsertSticker(sticker *types.Sticker) error {
+	var exists bool
+	err := S.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM STICKERS WHERE FileUniqueID = $1)`, sticker.FileUniqueID).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("Error during checking sticker existence: %w", err)
+	}
+
+	if exists {
+		return nil
+	}
+
+	query := `
+		INSERT INTO STICKERS (FileUniqueID, FileID, Emoji, SetName)
+		VALUES($1, $2, $3, $4)
+	`
+
+	_, err = S.db.Exec(query, sticker.FileUniqueID, sticker.FileID, sticker.Emoji, sticker.SetName)
+	if err != nil {
+		return fmt.Errorf("Error during inserting new sticker: %w", err)
+	}
+
+	return nil
+}
+
 func (S *Storage) InsertMessage(message *types.Message) error {
 	err := S.InsertChat(&message.Chat)
 	if err != nil {
-		return fmt.Errorf("Can't insert chat for message insertion: %w", err)
+		return fmt.Errorf("Can't insert Chat for message insertion: %w", err)
 	}
 
+	err = S.InsertSticker(&message.Sticker)
+	if err != nil {
+		return fmt.Errorf("Can't insert Sticker for message insertion: %w", err)
+	}
 	date := time.Unix(message.Date, 0)
 
 	query := `
-		INSERT INTO MESSAGES (MessageID, UserID, UserName, ChatID, TEXT, Sticker, Time, Deleted) 
+		INSERT INTO MESSAGES (MessageID, UserID, UserName, ChatID, TEXT, StickerID, Time, Deleted) 
 		VALUES($1, $2, $3, $4, $5, $6, $7, $8)
 	`
 	_, err = S.db.Exec(query, message.MessageID, message.From.UserID, message.From.Username,
-		message.Chat.ID, message.Text, message.Sticker.FileID, date, false)
+		message.Chat.ID, message.Text, message.Sticker.FileUniqueID, date, false)
 	if err != nil {
 		return fmt.Errorf("Can't insert message: %w", err)
 	}
@@ -288,10 +335,18 @@ func (S *Storage) DeleteExpectedMessage(message *types.Message) error {
 		DELETE FROM EXPECTED_MESSAGES WHERE ChatID = $1 AND UserID = $2
 	`
 
-	_, err := S.db.Exec(query, message.Chat.ID, message.From.UserID)
-
+	resp, err := S.db.Exec(query, message.Chat.ID, message.From.UserID)
 	if err != nil {
 		return fmt.Errorf("Can't delete message from EXPECTED_MESSAGE table: %w", err)
+	}
+
+	affected, err := resp.RowsAffected()
+	if affected != 1 {
+		return fmt.Errorf("There is no such expected message")
+	}
+
+	if err != nil {
+		return fmt.Errorf("Can'delete trigger: %w", err)
 	}
 
 	return nil
@@ -299,23 +354,34 @@ func (S *Storage) DeleteExpectedMessage(message *types.Message) error {
 
 func (S *Storage) InsertTrigger(message *types.Message) error {
 	query := `
-		INSERT INTO TRIGGERS (ChatID, UserID, TriggerPhrase, TriggerSticker)
-		VALUES($1, $2, $3, $4) 
-		ON CONFLICT (ChatID, TriggerPhrase, TriggerSticker) DO NOTHING
+		INSERT INTO TRIGGERS (ChatID, UserID, Username, TriggerType, Trigger)
+		VALUES($1, $2, $3, $4, $5) 
+		ON CONFLICT (ChatID, Trigger) DO NOTHING
 		RETURNING 1
 	`
+	var Trigger, TriggerType string
 
-	var A int
-	err := S.db.QueryRow(query, message.Chat.ID, message.From.UserID, strings.TrimSpace(message.Text), message.Sticker.FileID).Scan(&A)
+	if !(message.Sticker.FileUniqueID == "") {
+		TriggerType = "Sticker"
+		err := S.InsertSticker(&message.Sticker)
+		if err != nil {
+			return fmt.Errorf("Can't insert trigger: %w", errors.Join(err, S.DeleteExpectedMessage(message)))
+		}
+		Trigger = message.Sticker.FileUniqueID
+	} else {
+		TriggerType = "Text"
+		Trigger = strings.TrimSpace(message.Text)
+	}
+
+	var i int
+	err := S.db.QueryRow(query, message.Chat.ID, message.From.UserID, message.From.Username,
+		TriggerType, Trigger).Scan(&i)
 
 	if err != nil {
-		erro := S.DeleteExpectedMessage(message)
-		err = errors.Join(err, erro)
 		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("Such trigger already exists")
+			return errors.Join(err, S.DeleteExpectedMessage(message), utils.ErrTriggerExists)
 		}
-		return fmt.Errorf("Can't insert trigger: %w", err)
-
+		return errors.Join(fmt.Errorf("Can't insert trigger: %w", err), S.DeleteTrigger(message, false))
 	}
 
 	query = `
@@ -338,22 +404,28 @@ func (S *Storage) InsertTrigger(message *types.Message) error {
 }
 
 func (S *Storage) AddTriggerResponse(message *types.Message) error {
-	resp := strings.TrimSpace(message.Text)
-	var IsSticker = false
-	if message.Sticker.FileID != "" {
-		IsSticker = true
-		resp = message.Sticker.FileID
-	}
+	var TriggerResp, RespType string
 
+	if !(message.Sticker.FileUniqueID == "") {
+		RespType = "Sticker"
+		err := S.InsertSticker(&message.Sticker)
+		if err != nil {
+			return fmt.Errorf("Can't insert trigger: %w", errors.Join(err, S.DeleteExpectedMessage(message)))
+		}
+		TriggerResp = message.Sticker.FileUniqueID
+	} else {
+		RespType = "Text"
+		TriggerResp = strings.TrimSpace(message.Text)
+	}
 	query := `
 		UPDATE TRIGGERS 
 		SET 
 			TriggerResp = $1,
-			IsRespSticker = $2
+			RespType = $2
 		WHERE ChatID = $3 AND UserID = $4 AND TriggerResp IS NULL
 	`
 
-	_, err := S.db.Exec(query, resp, IsSticker, message.Chat.ID, message.From.UserID)
+	_, err := S.db.Exec(query, TriggerResp, RespType, message.Chat.ID, message.From.UserID)
 	if err != nil {
 		err = errors.Join(err, utils.ExecuteRollBack(
 			func() error { return S.DeleteExpectedMessage(message) },
@@ -375,13 +447,80 @@ func (S *Storage) AddTriggerResponse(message *types.Message) error {
 	return nil
 }
 
+func (S *Storage) GetChatTriggers(message *types.Message) (string, error) {
+	query := `
+		SELECT Trigger, TriggerType, Username FROM TRIGGERS
+		WHERE ChatID = $1
+		ORDER BY Username
+	`
+
+	row, err := S.db.Query(query, message.Chat.ID)
+	if err != nil {
+		return "", fmt.Errorf("Can't get chat triggers: %w", err)
+	}
+
+	defer row.Close()
+	var result string
+	var TrigPhrase, Username string
+	for row.Next() {
+		if err = row.Scan(&TrigPhrase, &Username); err != nil {
+			return "", fmt.Errorf("Can't get chat triggers: %w", err)
+		}
+
+		result += fmt.Sprintf("Trigger: %s\t Creator: %s\n", TrigPhrase, Username)
+	}
+
+	if err := row.Err(); err != nil {
+		return "", fmt.Errorf("Can't get chat triggers. Error during rows cycle: %w", err)
+	}
+
+	if result == "" {
+		return "", sql.ErrNoRows
+	}
+
+	return result, nil
+}
+
+func (S *Storage) GetPersonTriggers(message *types.Message) (string, error) {
+	query := `
+		SELECT TriggerPhrase FROM TRIGGERS
+		WHERE ChatID = $1 AND UserID = $2
+		ORDER BY TriggerPhrase
+	`
+
+	row, err := S.db.Query(query, message.Chat.ID, message.From.UserID)
+	if err != nil {
+		return "", fmt.Errorf("Can't get person triggers: %w", err)
+	}
+
+	defer row.Close()
+	var result string
+	var TrigPhrase string
+	for row.Next() {
+		if err = row.Scan(&TrigPhrase); err != nil {
+			return "", fmt.Errorf("Can't get person triggers: %w", err)
+		}
+
+		result += fmt.Sprintf("Trigger: %s\n", TrigPhrase)
+	}
+
+	if err := row.Err(); err != nil {
+		return "", fmt.Errorf("Can't get person triggers. Error during rows cycle: %w", err)
+	}
+
+	if result == "" {
+		return "", sql.ErrNoRows
+	}
+	return result, nil
+}
+
 func (S *Storage) IsTrigger(message *types.Message) (IsTrigger bool, err error) {
 	query := `
 		SELECT EXISTS (SELECT 1 FROM TRIGGERS
-		WHERE ChatID = $1 AND TriggerPhrase = $2 AND TriggerSticker = $3 AND TriggerResp IS NOT NULL)  
+		WHERE ChatID = $1 AND Trigger = $2 AND TriggerResp IS NOT NULL)  
 	`
 
-	err = S.db.QueryRow(query, message.Chat.ID, strings.TrimSpace(message.Text), message.Sticker.FileID).Scan(&IsTrigger)
+	err = S.db.QueryRow(query, message.Chat.ID, strings.TrimSpace(message.Text+message.Sticker.FileUniqueID)).Scan(&IsTrigger)
 	if err != nil {
 		return IsTrigger, fmt.Errorf("Can't check whether message is trigger: %w", err)
 	}
@@ -389,34 +528,48 @@ func (S *Storage) IsTrigger(message *types.Message) (IsTrigger bool, err error) 
 	return IsTrigger, nil
 }
 
-func (S *Storage) GetTriggerResp(message *types.Message) (resp string, IsSticker bool, err error) {
+func (S *Storage) GetTriggerResp(message *types.Message) (Resp string, RespType string, err error) {
 	query := `
-		SELECT TriggerResp, IsRespSticker FROM TRIGGERS
-		WHERE ChatID = $1 AND TriggerPhrase = $2 AND TriggerSticker = $3 AND TriggerResp IS NOT NULL 
+		SELECT TriggerResp, RespType FROM TRIGGERS
+		WHERE ChatID = $1 AND Trigger = $2 AND TriggerResp IS NOT NULL 
 	`
 
-	err = S.db.QueryRow(query, message.Chat.ID, strings.TrimSpace(message.Text), message.Sticker.FileID).Scan(&resp, &IsSticker)
+	err = S.db.QueryRow(query, message.Chat.ID,
+		strings.TrimSpace(message.Text+message.Sticker.FileUniqueID)).Scan(&Resp, &RespType)
+
 	if err != nil {
-		return "", false, fmt.Errorf("Can't get trigger response: %w", err)
+		return "", "", fmt.Errorf("Can't get trigger response: %w", err)
 	}
 
-	return resp, IsSticker, nil
+	if RespType == "Sticker" {
+		err = S.db.QueryRow(`SELECT FileID FROM STICKERS WHERE FileUniqueID = $1`, Resp).Scan(&Resp)
+		if err != nil {
+			return "", "", fmt.Errorf("Can't get trigger response: %w", err)
+		}
+	}
+
+	return Resp, RespType, nil
 }
 
 func (S *Storage) DeleteTrigger(message *types.Message, IsAdmin bool) error {
 	query := `
-		DELETE FROM TRIGGERS WHERE ChatID = $1 AND ((TriggerPhrase = $2 AND TriggerSticker = $3) OR TriggerResp IS NULL) AND (UserID = $4 OR $5)
+		DELETE FROM TRIGGERS WHERE ChatID = $1 AND Trigger = $2 AND (UserID = $3 OR $4)
 	`
 
-	resp, err := S.db.Exec(query, message.Chat.ID, strings.TrimSpace(message.Text), message.Sticker.FileID, message.From.UserID, IsAdmin)
+	resp, err := S.db.Exec(query, message.Chat.ID, strings.TrimSpace(message.Text+message.Sticker.FileUniqueID),
+		message.From.UserID, IsAdmin)
+
+	if err != nil {
+		return fmt.Errorf("Can' delete trigger: %w", err)
+	}
 
 	affected, err := resp.RowsAffected()
 	if affected != 1 {
-		return fmt.Errorf("An error occurred during trigger deletion, %d rows affected", affected)
+		return fmt.Errorf("Can't delete trigger: %w", utils.ErrTriggerDontExists)
 	}
 
 	if err != nil {
-		return fmt.Errorf("Can'delete trigger: %w", err)
+		return fmt.Errorf("Can't delete trigger: %w", err)
 	}
 
 	S.logger.Println("Trigger was successfully deleted")

@@ -52,8 +52,8 @@ var CommandBuilder = map[string]func() types.InputStruct{
 	},
 	"sendsticker": func() types.InputStruct {
 		return &types.SendSticker{
-			Chat_ID: readInputInt64("Type in ChatID"),
-			Sticker: readInput("Type in Sticker"),
+			Chat_ID:       readInputInt64("Type in ChatID"),
+			StickerFileID: readInput("Type in StickerFileID"),
 		}
 	},
 	"deletemessage": func() types.InputStruct {

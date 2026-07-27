@@ -77,6 +77,7 @@ func (c *Client) Send(method string, Param types.InputStruct) (*types.Message, e
 		return nil, fmt.Errorf("Error during Send execution bad response, A.Ok = %t", A.Ok)
 	}
 
+	c.logger.Printf("Response data:\t %#v\n\n", A)
 	c.logger.Println("Opperation " + method + " was successfully completed")
 
 	return &A.Result, nil
@@ -124,8 +125,6 @@ func (c *Client) doPostRequest(method string, param types.InputStruct) (response
 		return nil, fmt.Errorf("StatusCode is not OK, it is:  %s, %s", resp.Status, string(data))
 	}
 
-	c.logger.Println("Response data:\t", string(data))
-
 	return data, nil
 }
 
@@ -165,9 +164,17 @@ func (c *Client) SetCommands() error {
 				Command:     "delete_trigger",
 				Description: "Deletes an existing trigger, only creator of trigger or administrator may execute it",
 			},
+			{
+				Command:     "chat_triggers",
+				Description: "Returs all chat triggers",
+			},
+			{
+				Command:     "my_triggers",
+				Description: "Returs all chat triggers",
+			},
 		},
 		Scope: types.Scope{
-			Type: "all_private_chats",
+			Type: "all_group_chats",
 		},
 	}
 	resp, err := c.doPostRequest("setMyCommands", param)
@@ -185,7 +192,9 @@ func (c *Client) SetCommands() error {
 		return fmt.Errorf("An error occurred during SetCommads execution, OK = %t , Result = %t", A.Ok, A.Result)
 	}
 
-	param.Scope.Type = "all_group_chats"
+	c.logger.Printf("Response data:\t %#v\n\n", A)
+
+	param.Scope.Type = "all_private_chats"
 	param.Commands = append(param.Commands, types.BotCommand{Command: "start", Description: "Starts bot"})
 
 	resp, err = c.doPostRequest("setMyCommands", param)
@@ -203,13 +212,21 @@ func (c *Client) SetCommands() error {
 		return fmt.Errorf("An error occurred during SetCommads execution, OK = %t , Result = %t", A.Ok, A.Result)
 	}
 
+	c.logger.Printf("Response data:\t %#v\n\n", A)
+
 	return nil
 }
 
-func (c *Client) IsAdministrator(ChatID int64, UserID int64) (bool, error) {
-	resp, err := c.doPostRequest("getChatAdministrators", ChatID)
+func (c *Client) IsAdministrator(Chat *types.Chat, UserID int64) (bool, error) {
+	if Chat.Type == "private" {
+		return false, nil
+	}
+
+	resp, err := c.doPostRequest("getChatAdministrators", struct {
+		ChatID int64 `json:"chat_id"`
+	}{ChatID: Chat.ID})
 	if err != nil {
-		return false, fmt.Errorf("Can't get chat %d administrators, %w", ChatID, err)
+		return false, fmt.Errorf("Can't get chat %s, %d administrators, %w", Chat.Username, Chat.ID, err)
 	}
 
 	A := &types.GetAdministratorsResponse{}
@@ -218,6 +235,12 @@ func (c *Client) IsAdministrator(ChatID int64, UserID int64) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("Can't unmarshal response %w", err)
 	}
+
+	if !A.Ok {
+		return false, fmt.Errorf("Bad response, A.Ok = %t", A.Ok)
+	}
+
+	c.logger.Printf("Response data:\t %#v\n\n", A)
 
 	for _, i := range A.Result {
 		if i.User.UserID == UserID {

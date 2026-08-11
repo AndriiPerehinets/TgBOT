@@ -116,9 +116,9 @@ func SetUpStorage() *sql.DB {
 		ChatID BIGINT NOT NULL, 
 		Text VARCHAR(4096), 
 		StickerID VARCHAR(100), 
-		Time TIMESTAMPTZ NOT NULL, 
+		CreatedON TIMESTAMPTZ NOT NULL, 
 		Deleted BOOL NOT NULL,
-		CONSTRAINT pk_message PRIMARY KEY(MessageID),
+		CONSTRAINT unique_message UNIQUE(MessageID, ChatID),
 		CONSTRAINT fk_chat FOREIGN KEY(ChatID) REFERENCES CHATS(ChatID) ON DELETE CASCADE,
 		CONSTRAINT fk_stickerid FOREIGN KEY(StickerID) REFERENCES STICKERS(FileUniqueID) ON DELETE CASCADE)
 		`
@@ -135,6 +135,7 @@ func SetUpStorage() *sql.DB {
 		ChatID BIGINT NOT NULL,
 		UserID BIGINT NOT NULL,
 		State VARCHAR(50) NOT NULL,
+		CreatedON TIMESTAMPTZ NOT NULL,
 		CONSTRAINT fk_chatid FOREIGN KEY(ChatID) REFERENCES CHATS(ChatID) ON DELETE CASCADE,
 		CONSTRAINT unique_pair UNIQUE(ChatID, UserID))
 	`
@@ -227,14 +228,13 @@ func (S *Storage) InsertMessage(message *types.Message) error {
 	if err != nil {
 		return fmt.Errorf("Can't insert Sticker for message insertion: %w", err)
 	}
-	date := time.Unix(message.Date, 0)
 
 	query := `
-		INSERT INTO MESSAGES (MessageID, UserID, UserName, ChatID, TEXT, StickerID, Time, Deleted) 
+		INSERT INTO MESSAGES (MessageID, UserID, UserName, ChatID, TEXT, StickerID, CreatedON, Deleted) 
 		VALUES($1, $2, $3, $4, $5, $6, $7, $8)
 	`
 	_, err = S.db.Exec(query, message.MessageID, message.From.UserID, message.From.Username,
-		message.Chat.ID, message.Text, message.Sticker.FileUniqueID, date, false)
+		message.Chat.ID, message.Text, message.Sticker.FileUniqueID, time.Unix(message.Date, 0), false)
 	if err != nil {
 		return fmt.Errorf("Can't insert message: %w", err)
 	}
@@ -263,7 +263,7 @@ func (S *Storage) SelectLastMessage(chatID, botID int64) (*types.DeleteMessage, 
 			ChatID
 		FROM MESSAGES 
 		WHERE ChatID = $1 AND UserID = $2
-		ORDER BY Time DESC 
+		ORDER BY CreatedON DESC 
 		LIMIT 1
 	`
 
@@ -287,12 +287,12 @@ func (S *Storage) SelectLastMessage(chatID, botID int64) (*types.DeleteMessage, 
 
 func (S *Storage) InsertExpectedMessage(message *types.Message, state string) error {
 	query := `
-		INSERT INTO EXPECTED_MESSAGES (ChatID, UserId, State)
-		VALUES($1, $2, $3)
+		INSERT INTO EXPECTED_MESSAGES (ChatID, UserId, State, CreatedON)
+		VALUES($1, $2, $3, $4)
 		ON CONFLICT(ChatID, UserID) DO NOTHING
 	`
 
-	_, err := S.db.Exec(query, message.Chat.ID, message.From.UserID, state)
+	_, err := S.db.Exec(query, message.Chat.ID, message.From.UserID, state, time.Unix(message.Date, 0))
 	if err != nil {
 		return fmt.Errorf("Can't insert trigger to EXPECTED_MESSAGE table: %w", err)
 	}
@@ -449,9 +449,16 @@ func (S *Storage) AddTriggerResponse(message *types.Message) error {
 
 func (S *Storage) GetChatTriggers(message *types.Message) (string, error) {
 	query := `
-		SELECT Trigger, TriggerType, Username FROM TRIGGERS
-		WHERE ChatID = $1
-		ORDER BY Username
+		SELECT 
+			t.Trigger, 
+			t.Username,
+			s.Emoji,
+			s.SetName
+		FROM TRIGGERS t
+		LEFT JOIN STICKERS s
+			ON t.Trigger = s.FileUniqueID
+		WHERE t.ChatID = $1
+		ORDER BY t.Username
 	`
 
 	row, err := S.db.Query(query, message.Chat.ID)
@@ -460,14 +467,20 @@ func (S *Storage) GetChatTriggers(message *types.Message) (string, error) {
 	}
 
 	defer row.Close()
-	var result string
-	var TrigPhrase, Username string
+	var result, Trigger, Username string
+	var Emoji, SetName *string
 	for row.Next() {
-		if err = row.Scan(&TrigPhrase, &Username); err != nil {
+		if err = row.Scan(&Trigger, &Username, &Emoji, &SetName); err != nil {
 			return "", fmt.Errorf("Can't get chat triggers: %w", err)
 		}
 
-		result += fmt.Sprintf("Trigger: %s\t Creator: %s\n", TrigPhrase, Username)
+		if Emoji == nil {
+			Trigger = utils.TrancateText(Trigger, 35)
+			result += fmt.Sprintf("Trigger: %s\n   🔴 Creator: %s\n", Trigger, Username)
+		} else {
+			*SetName = utils.TrancateText(*SetName, 30)
+			result += fmt.Sprintf("Trigger: %s [From: %s]\n   🔴 Creator: %s\n", *Emoji, *SetName, Username)
+		}
 	}
 
 	if err := row.Err(); err != nil {
@@ -483,9 +496,15 @@ func (S *Storage) GetChatTriggers(message *types.Message) (string, error) {
 
 func (S *Storage) GetPersonTriggers(message *types.Message) (string, error) {
 	query := `
-		SELECT TriggerPhrase FROM TRIGGERS
-		WHERE ChatID = $1 AND UserID = $2
-		ORDER BY TriggerPhrase
+		SELECT 
+			t.Trigger,
+			s.Emoji,
+			s.SetName
+		FROM TRIGGERS t
+		LEFT JOIN STICKERS s
+			ON t.Trigger = s.FileUniqueID
+		WHERE t.ChatID = $1 AND t.UserID = $2
+		ORDER BY t.Trigger
 	`
 
 	row, err := S.db.Query(query, message.Chat.ID, message.From.UserID)
@@ -494,14 +513,21 @@ func (S *Storage) GetPersonTriggers(message *types.Message) (string, error) {
 	}
 
 	defer row.Close()
-	var result string
-	var TrigPhrase string
+	var result, Trigger string
+	var Emoji, SetName *string
 	for row.Next() {
-		if err = row.Scan(&TrigPhrase); err != nil {
+		if err = row.Scan(&Trigger, &Emoji, &SetName); err != nil {
 			return "", fmt.Errorf("Can't get person triggers: %w", err)
 		}
 
-		result += fmt.Sprintf("Trigger: %s\n", TrigPhrase)
+		if Emoji == nil {
+			utils.TrancateText(Trigger, 35)
+			result += fmt.Sprintf("Trigger: %s\n", Trigger)
+		} else {
+			utils.TrancateText(*SetName, 30)
+			result += fmt.Sprintf("Trigger: %s From[: %s]\n", *Emoji, *SetName)
+		}
+
 	}
 
 	if err := row.Err(); err != nil {
@@ -565,7 +591,7 @@ func (S *Storage) DeleteTrigger(message *types.Message, IsAdmin bool) error {
 
 	affected, err := resp.RowsAffected()
 	if affected != 1 {
-		return fmt.Errorf("Can't delete trigger: %w", utils.ErrTriggerDontExists)
+		return fmt.Errorf("Can't delete trigger: %w or you don't have the permission to delete this trigger", utils.ErrTriggerDontExists)
 	}
 
 	if err != nil {
@@ -573,6 +599,27 @@ func (S *Storage) DeleteTrigger(message *types.Message, IsAdmin bool) error {
 	}
 
 	S.logger.Println("Trigger was successfully deleted")
+
+	return nil
+}
+
+func (S *Storage) DeleteOldMessages() error {
+	query := `
+	DELETE FROM MESSAGES 
+	WHERE CreatedON < NOW() - INTERVAL '3 months';
+
+	DELETE FROM EXPECTED_MESSAGESS 
+	WHERE CreatedON < NOW() - INTERVAL '1 day';
+	`
+
+	affected, err := S.db.Exec(query)
+	if err != nil {
+		return fmt.Errorf("Can't delete old messages: %w", err)
+	}
+
+	if i, _ := affected.RowsAffected(); i != 0 {
+		S.logger.Printf("During DeleteOldMessages %d messages was deleted\n", i)
+	}
 
 	return nil
 }

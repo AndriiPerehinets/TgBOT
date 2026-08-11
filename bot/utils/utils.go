@@ -15,3 +15,11 @@ func ExecuteRollBack(actions ...func() error) (RollBackErr error) {
 	}
 	return RollBackErr
 }
+
+func TrancateText(text string, maxLen int) string {
+	if len(text) > maxLen {
+		runes := []rune(text)
+		return string(runes[:maxLen-3]) + "..."
+	}
+	return text
+}

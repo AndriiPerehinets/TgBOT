@@ -9,12 +9,12 @@ import (
 	"sv/types"
 )
 
-func (b *Bot) IsCommand(Message *types.Message) (commad func() error, ok bool) {
+func (b *Bot) isCommand(Message *types.Message) (commad func() error, ok bool) {
 	var CommandList = map[string]func() error{
-		"add_trigger":    func() error { return b.AddExpectedTrigger(Message) },
-		"delete_trigger": func() error { return b.AddExpectedDeleteTrigger(Message) },
-		"chat_triggers":  func() error { return b.GetChatTriggers(Message) },
-		"my_triggers":    func() error { return b.GetPersonTriggers(Message) },
+		"add_trigger":    func() error { return b.addExpectedTrigger(Message) },
+		"delete_trigger": func() error { return b.addExpectedDeleteTrigger(Message) },
+		"chat_triggers":  func() error { return b.getChatTriggers(Message) },
+		"my_triggers":    func() error { return b.getPersonTriggers(Message) },
 		// start, getmytriggers, get all cards, get my cards, deletealltriggers
 	}
 
@@ -27,7 +27,7 @@ func (b *Bot) IsCommand(Message *types.Message) (commad func() error, ok bool) {
 	return c, ok
 }
 
-func (b *Bot) SendText(message *types.Message, text string) error {
+func (b *Bot) sendText(message *types.Message, text string) error {
 	txt := &types.SendText{
 		Chat_ID: message.Chat.ID,
 		Text:    text,
@@ -45,7 +45,7 @@ func (b *Bot) SendText(message *types.Message, text string) error {
 	return nil
 }
 
-func (b *Bot) SendSticker(message *types.Message, StickerFileID string) error {
+func (b *Bot) sendSticker(message *types.Message, StickerFileID string) error {
 	stic := &types.SendSticker{
 		Chat_ID:       message.Chat.ID,
 		StickerFileID: StickerFileID,
@@ -64,7 +64,7 @@ func (b *Bot) SendSticker(message *types.Message, StickerFileID string) error {
 	return nil
 }
 
-func (b *Bot) SendStruct(command string, param types.InputStruct) error {
+func (b *Bot) sendStruct(command string, param types.InputStruct) error {
 	mes, err := b.Client.Send(command, param)
 	if err != nil {
 		return fmt.Errorf("Can't send struct: %#v, %w", param, err)
@@ -78,7 +78,7 @@ func (b *Bot) SendStruct(command string, param types.InputStruct) error {
 	return nil
 }
 
-func (b *Bot) DeleteMessage(param *types.DeleteMessage) error {
+func (b *Bot) deleteMessage(param *types.DeleteMessage) error {
 	err := b.Client.DeleteMessage(param)
 	if err != nil {
 		return fmt.Errorf("Can't delete message: %#v, %w", param, err)
@@ -92,7 +92,7 @@ func (b *Bot) DeleteMessage(param *types.DeleteMessage) error {
 	return nil
 }
 
-func (b *Bot) DeleteLastBotsMessage(chatID int64) error {
+func (b *Bot) deleteLastBotsMessage(chatID int64) error {
 	del, err := b.Storage.SelectLastMessage(chatID, b.ID)
 	if err != nil {
 		return fmt.Errorf("Can't delete last message: ChatID:%d, %w", chatID, err)
@@ -109,8 +109,8 @@ func (b *Bot) DeleteLastBotsMessage(chatID int64) error {
 	return nil
 }
 
-func (b *Bot) AddExpectedTrigger(message *types.Message) error {
-	err := b.SendText(message, "Type in trigger phrase")
+func (b *Bot) addExpectedTrigger(message *types.Message) error {
+	err := b.sendText(message, "Type in trigger phrase")
 	if err != nil {
 		return fmt.Errorf("Can't execute AddExpectedTrigger %w", err)
 	}
@@ -123,22 +123,23 @@ func (b *Bot) AddExpectedTrigger(message *types.Message) error {
 	return nil
 }
 
-func (b *Bot) AddTrigger(message *types.Message) error {
-	err := b.VerifyType(message)
+func (b *Bot) addTrigger(message *types.Message) error {
+	err := b.verifyType(message)
 	if err != nil {
 		return fmt.Errorf("Can't add trigger: %w", err)
 	}
+	message.Text = strings.ToLower(strings.TrimSpace(message.Text))
 	err = b.Storage.InsertTrigger(message)
 	if err != nil {
 		if errors.Is(err, utils.ErrTriggerExists) {
-			err = errors.Join(err, b.SendText(message, "Such trigger already exists"), utils.ErrUserNotified)
+			err = errors.Join(err, b.sendText(message, "Such trigger already exists"), utils.ErrUserNotified)
 			return fmt.Errorf("Can't add trigger. Error during message handling: %w", err)
 		}
 
 		return fmt.Errorf("Can't add trigger. Error during message handling: %w", err)
 	}
 
-	err = b.SendText(message, "Now send a response to the trigger")
+	err = b.sendText(message, "Now send a response to the trigger")
 	if err != nil {
 		err = errors.Join(err, utils.ExecuteRollBack(
 			func() error { return b.Storage.DeleteTrigger(message, false) },
@@ -150,8 +151,8 @@ func (b *Bot) AddTrigger(message *types.Message) error {
 	return nil
 }
 
-func (b *Bot) AddTriggerResp(message *types.Message) error {
-	err := b.VerifyType(message)
+func (b *Bot) addTriggerResp(message *types.Message) error {
+	err := b.verifyType(message)
 	if err != nil {
 		err = errors.Join(err, b.Storage.DeleteTrigger(message, false))
 		return fmt.Errorf("Can't set trigger response. Can't VerifyType of message: %w", err)
@@ -164,7 +165,7 @@ func (b *Bot) AddTriggerResp(message *types.Message) error {
 		return fmt.Errorf("Can't set trigger response. Error during message handling: %w", err)
 	}
 
-	err = b.SendText(message, "Trigger saved successfully")
+	err = b.sendText(message, "Trigger saved successfully")
 	if err != nil {
 		return fmt.Errorf("Can't send a submission message during message handling: %w", err)
 	}
@@ -172,8 +173,8 @@ func (b *Bot) AddTriggerResp(message *types.Message) error {
 	return nil
 }
 
-func (b *Bot) AddExpectedDeleteTrigger(message *types.Message) error {
-	err := b.SendText(message, "Type in the trigger that you want to delete")
+func (b *Bot) addExpectedDeleteTrigger(message *types.Message) error {
+	err := b.sendText(message, "Type in the trigger that you want to delete")
 	if err != nil {
 		return fmt.Errorf("Can't execute AddExpectedDeleteTrigger, %w", err)
 	}
@@ -186,8 +187,8 @@ func (b *Bot) AddExpectedDeleteTrigger(message *types.Message) error {
 	return nil
 }
 
-func (b *Bot) DeleteTrigger(message *types.Message) error {
-	err := b.VerifyType(message)
+func (b *Bot) deleteTrigger(message *types.Message) error {
+	err := b.verifyType(message)
 	if err != nil {
 		return fmt.Errorf("Can't delete trigger: %w", err)
 	}
@@ -201,13 +202,14 @@ func (b *Bot) DeleteTrigger(message *types.Message) error {
 	err = b.Storage.DeleteTrigger(message, IsAdmin)
 	if err != nil {
 		if errors.Is(err, utils.ErrTriggerDontExists) {
-			err = errors.Join(err, b.SendText(message, err.Error()), utils.ErrUserNotified)
+			err = errors.Join(err, b.sendText(message, utils.ErrTriggerDontExists.Error()+
+				" or you don't have the permission to delete this trigger"), utils.ErrUserNotified)
 			return fmt.Errorf("Can't DeleteTrigger: %w", err)
 		}
 		return fmt.Errorf("Can't DeleteTrigger: %w", err)
 	}
 
-	err = errors.Join(err, b.SendText(message, "Trigger was successfully deleted"))
+	err = errors.Join(err, b.sendText(message, "Trigger was successfully deleted"))
 	if err != nil {
 		return fmt.Errorf("Can't DeleteTrigger: %w", err)
 	}
@@ -215,43 +217,43 @@ func (b *Bot) DeleteTrigger(message *types.Message) error {
 	return nil
 }
 
-func (b *Bot) GetChatTriggers(message *types.Message) error {
+func (b *Bot) getChatTriggers(message *types.Message) error {
 	resp, err := b.Storage.GetChatTriggers(message)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			err = errors.Join(err, b.SendText(message, "There is no triggers yet"), utils.ErrUserNotified)
+			err = errors.Join(err, b.sendText(message, "There is no triggers yet"), utils.ErrUserNotified)
 			return err
 		}
 		return err
 	}
 
-	if err = b.SendText(message, resp); err != nil {
+	if err = b.sendText(message, resp); err != nil {
 		return fmt.Errorf("Can't get chat triggers: %w", err)
 	}
 
 	return nil
 }
 
-func (b *Bot) GetPersonTriggers(message *types.Message) error {
+func (b *Bot) getPersonTriggers(message *types.Message) error {
 	resp, err := b.Storage.GetPersonTriggers(message)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			err = errors.Join(err, b.SendText(message, "There is no triggers yet"), utils.ErrUserNotified)
+			err = errors.Join(err, b.sendText(message, "There is no triggers yet"), utils.ErrUserNotified)
 			return err
 		}
 		return err
 	}
 
-	if err = b.SendText(message, resp); err != nil {
+	if err = b.sendText(message, resp); err != nil {
 		return fmt.Errorf("Can't get person triggers: %w", err)
 	}
 
 	return nil
 }
 
-func (b *Bot) VerifyType(message *types.Message) error {
+func (b *Bot) verifyType(message *types.Message) error {
 	if fmt.Sprint(message.Text+message.Sticker.FileID) == "" {
-		err := b.SendText(message, "Trigger must be a text or sticker, if you still want to create a trigger use command again")
+		err := b.sendText(message, "Trigger must be a text or sticker, if you still want to create a trigger use command again")
 		err = errors.Join(err, b.Storage.DeleteExpectedMessage(message), utils.ErrUserNotified)
 		return fmt.Errorf("User send message of invalid type: %w", err)
 	}

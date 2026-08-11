@@ -1,14 +1,17 @@
 package bot
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sv/bot/client"
 	"sv/bot/storage"
 	"sv/bot/utils"
 	"sv/types"
+	"time"
 )
 
 type Bot struct {
@@ -24,8 +27,7 @@ func NewBot(Token string) *Bot {
 		Client: client.NewClient(Token),
 		Logger: log.New(os.Stdout, "Bot log:\t", log.Lshortfile|log.LstdFlags),
 		Storage: func() *storage.Storage {
-			db := storage.SetUpStorage()
-			storage := storage.NewStorage(db)
+			storage := storage.NewStorage(storage.SetUpStorage())
 			return storage
 		}(),
 	}
@@ -67,10 +69,10 @@ func (b *Bot) Fetch() {
 			b.Logger.Printf("Response data:\t %#v\n\n", u)
 			// go process.CreateWorkerPool(50, ch)
 
-			err = b.FetchMessage(&u.Message)
+			err = b.fetchMessage(&u.Message)
 			if err != nil {
 				if !errors.Is(err, utils.ErrUserNotified) {
-					err = errors.Join(err, b.SendText(&u.Message, "Sorry, an error occured"))
+					err = errors.Join(err, b.sendText(&u.Message, "Sorry, an error occured"))
 				}
 				b.Logger.Println(err)
 				continue
@@ -80,13 +82,67 @@ func (b *Bot) Fetch() {
 	}
 }
 
-func (b *Bot) FetchMessage(message *types.Message) error {
+func (b *Bot) DeleteOldMessages(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			err := b.Storage.DeleteOldMessages()
+			if err != nil {
+				b.Logger.Println(errors.Join(err, utils.ErrUserNotified))
+			}
+		case <-ctx.Done():
+			b.Logger.Println("DeleteOldMessage was stopped by context")
+			return
+		}
+	}
+}
+
+func (b *Bot) DoCMDCommand(command string, param types.InputStruct) error {
+	var MethodsList = map[string]func() error{
+		"sendmessage": func() error { return b.sendStruct(command, param) },
+		"sendsticker": func() error { return b.sendStruct(command, param) },
+
+		"deletemessage": func() error {
+			param, ok := param.(*types.DeleteMessage)
+			if !ok {
+				return fmt.Errorf("Can't delete message, type of param should be types.DeleteMessage")
+			}
+
+			return b.deleteMessage(param)
+		},
+
+		"deletelastmessage": func() error {
+			param, ok := param.(*types.DeleteMessage)
+			if !ok {
+				return fmt.Errorf("Can't delete message, type of param should be types.DeleteMessage")
+			}
+
+			return b.deleteLastBotsMessage(param.Chat_ID)
+		},
+	}
+
+	meth, ok := MethodsList[command]
+	if !ok {
+		return fmt.Errorf("Method %s didn't exist inside bot.DoCMDCommand", command)
+	}
+	err := meth()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (b *Bot) fetchMessage(message *types.Message) error {
 	err := b.Storage.InsertMessage(message)
 	if err != nil {
 		return fmt.Errorf("Can't insert message: %w", err)
 	}
 
-	command, ok := b.IsCommand(message)
+	command, ok := b.isCommand(message)
 	if ok {
 		b.Logger.Println("Message is a command: ", message.Text)
 		err := command()
@@ -114,6 +170,7 @@ func (b *Bot) FetchMessage(message *types.Message) error {
 }
 
 func (b *Bot) triggerHandle(message *types.Message) (error, bool) {
+	message.Text = strings.ToLower(strings.TrimSpace(message.Text))
 	IsTrigger, err := b.Storage.IsTrigger(message)
 	if err != nil {
 		return fmt.Errorf("Error during message handling %w", err), false
@@ -127,7 +184,7 @@ func (b *Bot) triggerHandle(message *types.Message) (error, bool) {
 		}
 
 		if RespType == "Sticker" {
-			err := b.SendSticker(message, TriggerResp)
+			err := b.sendSticker(message, TriggerResp)
 			if err != nil {
 				return fmt.Errorf("Can't send response to the trigger: %w", err), false
 			}
@@ -135,7 +192,7 @@ func (b *Bot) triggerHandle(message *types.Message) (error, bool) {
 			return nil, true
 		}
 
-		err = b.SendText(message, TriggerResp)
+		err = b.sendText(message, TriggerResp)
 		if err != nil {
 			return fmt.Errorf("Can't send responce to the trigger: %w", err), false
 		}
@@ -161,21 +218,21 @@ func (b *Bot) expectedHandle(message *types.Message) (err error, done bool) {
 
 		switch State {
 		case "Trigger":
-			err = b.AddTrigger(message)
+			err = b.addTrigger(message)
 			if err != nil {
 				return err, false
 			}
 			return nil, true
 
 		case "TriggerResp":
-			err = b.AddTriggerResp(message)
+			err = b.addTriggerResp(message)
 			if err != nil {
 				return err, false
 			}
 			return nil, true
 
 		case "TriggerName":
-			err = b.DeleteTrigger(message)
+			err = b.deleteTrigger(message)
 			if err != nil {
 				return err, false
 			}
@@ -183,40 +240,4 @@ func (b *Bot) expectedHandle(message *types.Message) (err error, done bool) {
 		}
 	}
 	return nil, false
-}
-
-func (b *Bot) DoCMDCommand(command string, param types.InputStruct) error {
-	var MethodsList = map[string]func() error{
-		"sendmessage": func() error { return b.SendStruct(command, param) },
-		"sendsticker": func() error { return b.SendStruct(command, param) },
-
-		"deletemessage": func() error {
-			param, ok := param.(*types.DeleteMessage)
-			if !ok {
-				return fmt.Errorf("Can't delete message, type of param should be types.DeleteMessage")
-			}
-
-			return b.DeleteMessage(param)
-		},
-
-		"deletelastmessage": func() error {
-			param, ok := param.(*types.DeleteMessage)
-			if !ok {
-				return fmt.Errorf("Can't delete message, type of param should be types.DeleteMessage")
-			}
-
-			return b.DeleteLastBotsMessage(param.Chat_ID)
-		},
-	}
-
-	meth, ok := MethodsList[command]
-	if !ok {
-		return fmt.Errorf("Method %s didn't exist inside bot.DoCMDCommand", command)
-	}
-	err := meth()
-	if err != nil {
-		return err
-	}
-
-	return nil
 }

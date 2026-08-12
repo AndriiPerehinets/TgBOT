@@ -142,6 +142,13 @@ func (b *Bot) fetchMessage(message *types.Message) error {
 		return fmt.Errorf("Can't insert message: %w", err)
 	}
 
+	err, ok := b.expectedHandle(message)
+	if err != nil {
+		return err
+	} else if ok {
+		return nil
+	}
+
 	command, ok := b.isCommand(message)
 	if ok {
 		b.Logger.Println("Message is a command: ", message.Text)
@@ -149,13 +156,6 @@ func (b *Bot) fetchMessage(message *types.Message) error {
 		if err != nil {
 			return fmt.Errorf("Can't execute user command: %w", err)
 		}
-		return nil
-	}
-
-	err, ok = b.expectedHandle(message)
-	if err != nil {
-		return err
-	} else if ok {
 		return nil
 	}
 

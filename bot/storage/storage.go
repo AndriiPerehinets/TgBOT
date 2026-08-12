@@ -393,10 +393,7 @@ func (S *Storage) InsertTrigger(message *types.Message) error {
 
 	_, err = S.db.Exec(query, message.Chat.ID, message.From.UserID)
 	if err != nil {
-		err = errors.Join(err, utils.ExecuteRollBack(
-			func() error { return S.DeleteExpectedMessage(message) },
-			func() error { return S.DeleteTrigger(message, false) },
-		))
+		err = errors.Join(err, S.DeleteExpectedMessage(message), S.DeleteTrigger(message, false))
 		return fmt.Errorf("Can't change expected message status to IsTriggerResponse %w", err)
 	}
 
@@ -410,7 +407,7 @@ func (S *Storage) AddTriggerResponse(message *types.Message) error {
 		RespType = "Sticker"
 		err := S.InsertSticker(&message.Sticker)
 		if err != nil {
-			return fmt.Errorf("Can't insert trigger: %w", errors.Join(err, S.DeleteExpectedMessage(message)))
+			return fmt.Errorf("Can't insert trigger: %w", errors.Join(err, S.DeleteExpectedMessage(message), S.DeleteTrigger(message, false)))
 		}
 		TriggerResp = message.Sticker.FileUniqueID
 	} else {
@@ -427,20 +424,14 @@ func (S *Storage) AddTriggerResponse(message *types.Message) error {
 
 	_, err := S.db.Exec(query, TriggerResp, RespType, message.Chat.ID, message.From.UserID)
 	if err != nil {
-		err = errors.Join(err, utils.ExecuteRollBack(
-			func() error { return S.DeleteExpectedMessage(message) },
-			func() error { return S.DeleteTrigger(message, false) },
-		))
+		err = errors.Join(err, S.DeleteExpectedMessage(message), S.DeleteTrigger(message, false))
 
 		return fmt.Errorf("Can't add trigger reponse %w", err)
 	}
 
 	err = S.DeleteExpectedMessage(message)
 	if err != nil {
-		erro := S.DeleteTrigger(message, false)
-		if erro != nil {
-			return fmt.Errorf("Error during adding trigger response: %w, %w", err, erro)
-		}
+		err := errors.Join(err, S.DeleteTrigger(message, false))
 		return fmt.Errorf("Error during adding trigger response: %w", err)
 	}
 
@@ -579,7 +570,7 @@ func (S *Storage) GetTriggerResp(message *types.Message) (Resp string, RespType 
 
 func (S *Storage) DeleteTrigger(message *types.Message, IsAdmin bool) error {
 	query := `
-		DELETE FROM TRIGGERS WHERE ChatID = $1 AND Trigger = $2 AND (UserID = $3 OR $4)
+		DELETE FROM TRIGGERS WHERE ChatID = $1 AND (Trigger = $2 OR TriggerResp IS NULL) AND (UserID = $3 OR $4)
 	`
 
 	resp, err := S.db.Exec(query, message.Chat.ID, strings.TrimSpace(message.Text+message.Sticker.FileUniqueID),
@@ -608,7 +599,7 @@ func (S *Storage) DeleteOldMessages() error {
 	DELETE FROM MESSAGES 
 	WHERE CreatedON < NOW() - INTERVAL '3 months';
 
-	DELETE FROM EXPECTED_MESSAGESS 
+	DELETE FROM EXPECTED_MESSAGES 
 	WHERE CreatedON < NOW() - INTERVAL '1 day';
 	`
 

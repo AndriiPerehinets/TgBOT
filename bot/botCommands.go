@@ -98,10 +98,7 @@ func (b *Bot) deleteLastBotsMessage(chatID int64) error {
 		return fmt.Errorf("Can't delete last message: ChatID:%d, %w", chatID, err)
 	}
 
-	err = utils.ExecuteRollBack(
-		func() error { return b.Client.DeleteMessage(del) },
-		func() error { return b.Storage.UpdateMessageStatus(del) },
-	)
+	err = errors.Join(b.Client.DeleteMessage(del), b.Storage.UpdateMessageStatus(del))
 	if err != nil {
 		return fmt.Errorf("Can't delete last message: ChatID:%d, %w", chatID, err)
 	}
@@ -126,7 +123,8 @@ func (b *Bot) addExpectedTrigger(message *types.Message) error {
 func (b *Bot) addTrigger(message *types.Message) error {
 	err := b.verifyType(message)
 	if err != nil {
-		return fmt.Errorf("Can't add trigger: %w", err)
+		err := errors.Join(err, b.Storage.DeleteExpectedMessage(message))
+		return fmt.Errorf("Can't add trigger. Can't VerifyType of message: %w", err)
 	}
 	message.Text = strings.ToLower(strings.TrimSpace(message.Text))
 	err = b.Storage.InsertTrigger(message)
@@ -141,10 +139,7 @@ func (b *Bot) addTrigger(message *types.Message) error {
 
 	err = b.sendText(message, "Now send a response to the trigger")
 	if err != nil {
-		err = errors.Join(err, utils.ExecuteRollBack(
-			func() error { return b.Storage.DeleteTrigger(message, false) },
-			func() error { return b.Storage.DeleteExpectedMessage(message) },
-		))
+		err = errors.Join(err, b.Storage.DeleteTrigger(message, false), b.Storage.DeleteExpectedMessage(message))
 
 		return fmt.Errorf("Can't add trigger. Error during message handling: %w", err)
 	}
@@ -154,14 +149,13 @@ func (b *Bot) addTrigger(message *types.Message) error {
 func (b *Bot) addTriggerResp(message *types.Message) error {
 	err := b.verifyType(message)
 	if err != nil {
-		err = errors.Join(err, b.Storage.DeleteTrigger(message, false))
+		err = errors.Join(err, b.Storage.DeleteTrigger(message, false), b.Storage.DeleteExpectedMessage(message))
 		return fmt.Errorf("Can't set trigger response. Can't VerifyType of message: %w", err)
 	}
 
 	err = b.Storage.AddTriggerResponse(message)
 	if err != nil {
 		err = errors.Join(err, b.Storage.DeleteTrigger(message, false))
-
 		return fmt.Errorf("Can't set trigger response. Error during message handling: %w", err)
 	}
 
@@ -252,7 +246,10 @@ func (b *Bot) getPersonTriggers(message *types.Message) error {
 }
 
 func (b *Bot) verifyType(message *types.Message) error {
-	if fmt.Sprint(message.Text+message.Sticker.FileID) == "" {
+	if _, ok := b.isCommand(message); ok {
+		err := errors.Join(b.sendText(message, "You can't use this message because it is one of the bot commands, if you still want to create a trigger use command again"), utils.ErrUserNotified)
+		return fmt.Errorf("User send message of invalid type: %w", err)
+	} else if fmt.Sprint(message.Text+message.Sticker.FileID) == "" {
 		err := b.sendText(message, "Trigger must be a text or sticker, if you still want to create a trigger use command again")
 		err = errors.Join(err, b.Storage.DeleteExpectedMessage(message), utils.ErrUserNotified)
 		return fmt.Errorf("User send message of invalid type: %w", err)

@@ -1,4 +1,4 @@
-module sv
+module github.com/AndriiPerehinets/TgBOT
 
 go 1.26.1
 

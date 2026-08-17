@@ -1,4 +1,4 @@
-package types
+package telegram
 
 type InputStruct interface{}
 

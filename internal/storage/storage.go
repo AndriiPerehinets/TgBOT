@@ -7,9 +7,10 @@ import (
 	"log"
 	"os"
 	"strings"
-	"sv/bot/utils"
-	"sv/types"
 	"time"
+
+	"github.com/AndriiPerehinets/TgBOT/internal/telegram"
+	"github.com/AndriiPerehinets/TgBOT/internal/utils"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -168,7 +169,7 @@ func SetUpStorage() *sql.DB {
 	return db
 }
 
-func (S *Storage) InsertChat(chat *types.Chat) error {
+func (S *Storage) InsertChat(chat *telegram.Chat) error {
 	var exists bool
 	row := S.db.QueryRow("SELECT EXISTS(SELECT 1 FROM CHATS WHERE chatid = $1)", chat.ID)
 	err := row.Scan(&exists)
@@ -194,7 +195,7 @@ func (S *Storage) InsertChat(chat *types.Chat) error {
 	return nil
 }
 
-func (S *Storage) InsertSticker(sticker *types.Sticker) error {
+func (S *Storage) InsertSticker(sticker *telegram.Sticker) error {
 	var exists bool
 	err := S.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM STICKERS WHERE FileUniqueID = $1)`, sticker.FileUniqueID).Scan(&exists)
 	if err != nil {
@@ -218,7 +219,7 @@ func (S *Storage) InsertSticker(sticker *types.Sticker) error {
 	return nil
 }
 
-func (S *Storage) InsertMessage(message *types.Message) error {
+func (S *Storage) InsertMessage(message *telegram.Message) error {
 	err := S.InsertChat(&message.Chat)
 	if err != nil {
 		return fmt.Errorf("Can't insert Chat for message insertion: %w", err)
@@ -242,7 +243,7 @@ func (S *Storage) InsertMessage(message *types.Message) error {
 	return nil
 }
 
-func (S *Storage) UpdateMessageStatus(param *types.DeleteMessage) error {
+func (S *Storage) UpdateMessageStatus(param *telegram.DeleteMessage) error {
 	query := `
 		UPDATE MESSAGES
 		SET Deleted = TRUE
@@ -256,7 +257,7 @@ func (S *Storage) UpdateMessageStatus(param *types.DeleteMessage) error {
 	return nil
 }
 
-func (S *Storage) SelectLastMessage(chatID, botID int64) (*types.DeleteMessage, error) {
+func (S *Storage) SelectLastMessage(chatID, botID int64) (*telegram.DeleteMessage, error) {
 	query := `
 		SELECT 
 			MessageID, 
@@ -277,7 +278,7 @@ func (S *Storage) SelectLastMessage(chatID, botID int64) (*types.DeleteMessage, 
 		return nil, fmt.Errorf("Error during searching for last message: %w", err)
 	}
 
-	resp := &types.DeleteMessage{
+	resp := &telegram.DeleteMessage{
 		MessageID: MessageID,
 		Chat_ID:   ChatID,
 	}
@@ -285,7 +286,7 @@ func (S *Storage) SelectLastMessage(chatID, botID int64) (*types.DeleteMessage, 
 	return resp, nil
 }
 
-func (S *Storage) InsertExpectedMessage(message *types.Message, state string) error {
+func (S *Storage) InsertExpectedMessage(message *telegram.Message, state string) error {
 	query := `
 		INSERT INTO EXPECTED_MESSAGES (ChatID, UserId, State, CreatedON)
 		VALUES($1, $2, $3, $4)
@@ -300,7 +301,7 @@ func (S *Storage) InsertExpectedMessage(message *types.Message, state string) er
 	return nil
 }
 
-func (S *Storage) GetExpectedMessageState(message *types.Message) (State string, err error) {
+func (S *Storage) GetExpectedMessageState(message *telegram.Message) (State string, err error) {
 	query := `
 		SELECT 
 			State
@@ -316,7 +317,7 @@ func (S *Storage) GetExpectedMessageState(message *types.Message) (State string,
 	return State, nil
 }
 
-func (S *Storage) IsExpected(message *types.Message) (bool, error) {
+func (S *Storage) IsExpected(message *telegram.Message) (bool, error) {
 	query := `
 		SELECT EXISTS (SELECT * FROM EXPECTED_MESSAGES 
 		WHERE ChatID = $1 AND UserID = $2)
@@ -330,7 +331,7 @@ func (S *Storage) IsExpected(message *types.Message) (bool, error) {
 	return exists, nil
 }
 
-func (S *Storage) DeleteExpectedMessage(message *types.Message) error {
+func (S *Storage) DeleteExpectedMessage(message *telegram.Message) error {
 	query := `
 		DELETE FROM EXPECTED_MESSAGES WHERE ChatID = $1 AND UserID = $2
 	`
@@ -352,7 +353,7 @@ func (S *Storage) DeleteExpectedMessage(message *types.Message) error {
 	return nil
 }
 
-func (S *Storage) InsertTrigger(message *types.Message) error {
+func (S *Storage) InsertTrigger(message *telegram.Message) error {
 	query := `
 		INSERT INTO TRIGGERS (ChatID, UserID, Username, TriggerType, Trigger)
 		VALUES($1, $2, $3, $4, $5) 
@@ -400,7 +401,7 @@ func (S *Storage) InsertTrigger(message *types.Message) error {
 	return nil
 }
 
-func (S *Storage) AddTriggerResponse(message *types.Message) error {
+func (S *Storage) AddTriggerResponse(message *telegram.Message) error {
 	var TriggerResp, RespType string
 
 	if !(message.Sticker.FileUniqueID == "") {
@@ -438,7 +439,7 @@ func (S *Storage) AddTriggerResponse(message *types.Message) error {
 	return nil
 }
 
-func (S *Storage) GetChatTriggers(message *types.Message) (string, error) {
+func (S *Storage) GetChatTriggers(message *telegram.Message) (string, error) {
 	query := `
 		SELECT 
 			t.Trigger, 
@@ -485,7 +486,7 @@ func (S *Storage) GetChatTriggers(message *types.Message) (string, error) {
 	return result, nil
 }
 
-func (S *Storage) GetPersonTriggers(message *types.Message) (string, error) {
+func (S *Storage) GetPersonTriggers(message *telegram.Message) (string, error) {
 	query := `
 		SELECT 
 			t.Trigger,
@@ -531,7 +532,7 @@ func (S *Storage) GetPersonTriggers(message *types.Message) (string, error) {
 	return result, nil
 }
 
-func (S *Storage) IsTrigger(message *types.Message) (IsTrigger bool, err error) {
+func (S *Storage) IsTrigger(message *telegram.Message) (IsTrigger bool, err error) {
 	query := `
 		SELECT EXISTS (SELECT 1 FROM TRIGGERS
 		WHERE ChatID = $1 AND Trigger = $2 AND TriggerResp IS NOT NULL)  
@@ -545,7 +546,7 @@ func (S *Storage) IsTrigger(message *types.Message) (IsTrigger bool, err error) 
 	return IsTrigger, nil
 }
 
-func (S *Storage) GetTriggerResp(message *types.Message) (Resp string, RespType string, err error) {
+func (S *Storage) GetTriggerResp(message *telegram.Message) (Resp string, RespType string, err error) {
 	query := `
 		SELECT TriggerResp, RespType FROM TRIGGERS
 		WHERE ChatID = $1 AND Trigger = $2 AND TriggerResp IS NOT NULL 
@@ -568,7 +569,7 @@ func (S *Storage) GetTriggerResp(message *types.Message) (Resp string, RespType 
 	return Resp, RespType, nil
 }
 
-func (S *Storage) DeleteTrigger(message *types.Message, IsAdmin bool) error {
+func (S *Storage) DeleteTrigger(message *telegram.Message, IsAdmin bool) error {
 	query := `
 		DELETE FROM TRIGGERS WHERE ChatID = $1 AND (Trigger = $2 OR TriggerResp IS NULL) AND (UserID = $3 OR $4)
 	`

@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,7 +10,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sv/types"
+	"time"
+
+	"github.com/AndriiPerehinets/TgBOT/internal/telegram"
 )
 
 type Client struct {
@@ -32,7 +35,7 @@ func NewClient(token string) *Client {
 	}
 }
 
-func (c *Client) GetMe() (*types.User, error) {
+func (c *Client) GetMe() (*telegram.User, error) {
 	req, err := http.NewRequest("GET", c.url.String()+"/getMe", nil)
 	if err != nil {
 		return nil, fmt.Errorf("Can't create request %w ", err)
@@ -43,7 +46,7 @@ func (c *Client) GetMe() (*types.User, error) {
 		return nil, fmt.Errorf("Error during request execution %w", err)
 	}
 
-	respStruct := &types.GetMeResponse{}
+	respStruct := &telegram.GetMeResponse{}
 
 	defer resp.Body.Close()
 
@@ -61,13 +64,13 @@ func (c *Client) GetMe() (*types.User, error) {
 	return &U, nil
 }
 
-func (c *Client) Send(method string, Param types.InputStruct) (*types.Message, error) {
+func (c *Client) Send(method string, Param telegram.InputStruct) (*telegram.Message, error) {
 	resp, err := c.doPostRequest(method, Param)
 	if err != nil {
 		return nil, err
 	}
 
-	var A types.SendResponse
+	var A telegram.SendResponse
 
 	if err = json.Unmarshal(resp, &A); err != nil {
 		return nil, fmt.Errorf("can't decode response: %w", err)
@@ -83,7 +86,7 @@ func (c *Client) Send(method string, Param types.InputStruct) (*types.Message, e
 	return &A.Result, nil
 }
 
-func (c *Client) DeleteMessage(param *types.DeleteMessage) error {
+func (c *Client) DeleteMessage(param *telegram.DeleteMessage) error {
 	_, err := c.doPostRequest("deletemessage", param)
 	if err != nil {
 		return err
@@ -94,7 +97,7 @@ func (c *Client) DeleteMessage(param *types.DeleteMessage) error {
 	return nil
 }
 
-func (c *Client) doPostRequest(method string, param types.InputStruct) (response []byte, err error) {
+func (c *Client) doPostRequest(method string, param telegram.InputStruct) (response []byte, err error) {
 	p, err := json.Marshal(param)
 	if err != nil {
 		return nil, fmt.Errorf("Paraments can't be marshalled, %w", err)
@@ -102,7 +105,10 @@ func (c *Client) doPostRequest(method string, param types.InputStruct) (response
 
 	b := bytes.NewBuffer(p)
 
-	req, err := http.NewRequest("POST", c.url.String()+"/"+method, b)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*65)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.url.String()+"/"+method, b)
 	if err != nil {
 		return nil, fmt.Errorf("Can't create request %w", err)
 	}
@@ -128,8 +134,8 @@ func (c *Client) doPostRequest(method string, param types.InputStruct) (response
 	return data, nil
 }
 
-func (c *Client) GetUpdate(offset int64) ([]types.Update, error) {
-	param := types.GetUpdate{
+func (c *Client) GetUpdate(offset int64) ([]telegram.Update, error) {
+	param := telegram.GetUpdate{
 		Offset:  offset,
 		Timeout: 60,
 	}
@@ -139,7 +145,7 @@ func (c *Client) GetUpdate(offset int64) ([]types.Update, error) {
 		return nil, fmt.Errorf("An error occurred during getUpdate request %w", err)
 	}
 
-	A := &types.GetUpdateResponse{}
+	A := &telegram.GetUpdateResponse{}
 
 	err = json.Unmarshal(resp, A)
 	if err != nil {
@@ -154,8 +160,8 @@ func (c *Client) GetUpdate(offset int64) ([]types.Update, error) {
 }
 
 func (c *Client) SetCommands() error {
-	param := &types.SetBotCommand{
-		Commands: []types.BotCommand{
+	param := &telegram.SetBotCommand{
+		Commands: []telegram.BotCommand{
 			{
 				Command:     "add_trigger",
 				Description: "Adds a new trigger. Whenever the trigger message is sent, the bot will respond with a predefined by user message",
@@ -173,7 +179,7 @@ func (c *Client) SetCommands() error {
 				Description: "Returs all chat triggers",
 			},
 		},
-		Scope: types.Scope{
+		Scope: telegram.Scope{
 			Type: "all_group_chats",
 		},
 	}
@@ -182,7 +188,7 @@ func (c *Client) SetCommands() error {
 		return fmt.Errorf("Can't set bot commands: %w", err)
 	}
 
-	A := &types.SetCommandsResponse{}
+	A := &telegram.SetCommandsResponse{}
 	err = json.Unmarshal(resp, A)
 	if err != nil {
 		return fmt.Errorf("Can't unmarhsal respose: %w", err)
@@ -195,14 +201,14 @@ func (c *Client) SetCommands() error {
 	c.logger.Printf("Response data:\t %#v\n\n", A)
 
 	param.Scope.Type = "all_private_chats"
-	param.Commands = append(param.Commands, types.BotCommand{Command: "start", Description: "Starts bot"})
+	param.Commands = append(param.Commands, telegram.BotCommand{Command: "start", Description: "Starts bot"})
 
 	resp, err = c.doPostRequest("setMyCommands", param)
 	if err != nil {
 		return fmt.Errorf("Can't set bot commands: %w", err)
 	}
 
-	A = &types.SetCommandsResponse{}
+	A = &telegram.SetCommandsResponse{}
 	err = json.Unmarshal(resp, A)
 	if err != nil {
 		return fmt.Errorf("Can't unmarhsal respose: %w", err)
@@ -217,7 +223,7 @@ func (c *Client) SetCommands() error {
 	return nil
 }
 
-func (c *Client) IsAdministrator(Chat *types.Chat, UserID int64) (bool, error) {
+func (c *Client) IsAdministrator(Chat *telegram.Chat, UserID int64) (bool, error) {
 	if Chat.Type == "private" {
 		return false, nil
 	}
@@ -229,7 +235,7 @@ func (c *Client) IsAdministrator(Chat *types.Chat, UserID int64) (bool, error) {
 		return false, fmt.Errorf("Can't get chat %s, %d administrators, %w", Chat.Username, Chat.ID, err)
 	}
 
-	A := &types.GetAdministratorsResponse{}
+	A := &telegram.GetAdministratorsResponse{}
 
 	err = json.Unmarshal(resp, A)
 	if err != nil {

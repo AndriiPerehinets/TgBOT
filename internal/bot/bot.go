@@ -7,11 +7,12 @@ import (
 	"log"
 	"os"
 	"strings"
-	"sv/bot/client"
-	"sv/bot/storage"
-	"sv/bot/utils"
-	"sv/types"
 	"time"
+
+	"github.com/AndriiPerehinets/TgBOT/internal/storage"
+	"github.com/AndriiPerehinets/TgBOT/internal/telegram"
+	"github.com/AndriiPerehinets/TgBOT/internal/telegram/client"
+	"github.com/AndriiPerehinets/TgBOT/internal/utils"
 )
 
 type Bot struct {
@@ -100,13 +101,13 @@ func (b *Bot) DeleteOldMessages(ctx context.Context) {
 	}
 }
 
-func (b *Bot) DoCMDCommand(command string, param types.InputStruct) error {
+func (b *Bot) DoCMDCommand(command string, param telegram.InputStruct) error {
 	var MethodsList = map[string]func() error{
 		"sendmessage": func() error { return b.sendStruct(command, param) },
 		"sendsticker": func() error { return b.sendStruct(command, param) },
 
 		"deletemessage": func() error {
-			param, ok := param.(*types.DeleteMessage)
+			param, ok := param.(*telegram.DeleteMessage)
 			if !ok {
 				return fmt.Errorf("Can't delete message, type of param should be types.DeleteMessage")
 			}
@@ -115,7 +116,7 @@ func (b *Bot) DoCMDCommand(command string, param types.InputStruct) error {
 		},
 
 		"deletelastmessage": func() error {
-			param, ok := param.(*types.DeleteMessage)
+			param, ok := param.(*telegram.DeleteMessage)
 			if !ok {
 				return fmt.Errorf("Can't delete message, type of param should be types.DeleteMessage")
 			}
@@ -136,7 +137,7 @@ func (b *Bot) DoCMDCommand(command string, param types.InputStruct) error {
 	return nil
 }
 
-func (b *Bot) fetchMessage(message *types.Message) error {
+func (b *Bot) fetchMessage(message *telegram.Message) error {
 	err := b.Storage.InsertMessage(message)
 	if err != nil {
 		return fmt.Errorf("Can't insert message: %w", err)
@@ -152,7 +153,7 @@ func (b *Bot) fetchMessage(message *types.Message) error {
 	command, ok := b.isCommand(message)
 	if ok {
 		b.Logger.Println("Message is a command: ", message.Text)
-		err := command()
+		err := command(b, message)
 		if err != nil {
 			return fmt.Errorf("Can't execute user command: %w", err)
 		}
@@ -169,7 +170,7 @@ func (b *Bot) fetchMessage(message *types.Message) error {
 	return nil
 }
 
-func (b *Bot) triggerHandle(message *types.Message) (error, bool) {
+func (b *Bot) triggerHandle(message *telegram.Message) (error, bool) {
 	message.Text = strings.ToLower(strings.TrimSpace(message.Text))
 	IsTrigger, err := b.Storage.IsTrigger(message)
 	if err != nil {
@@ -202,7 +203,7 @@ func (b *Bot) triggerHandle(message *types.Message) (error, bool) {
 	return nil, false
 }
 
-func (b *Bot) expectedHandle(message *types.Message) (err error, done bool) {
+func (b *Bot) expectedHandle(message *telegram.Message) (err error, done bool) {
 	expected, err := b.Storage.IsExpected(message)
 	if err != nil {
 		return fmt.Errorf("Error during message handling: %w", err), false

@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"os/signal"
-	"sv/start"
 	"syscall"
+
+	"github.com/AndriiPerehinets/TgBOT/internal/bot"
+	"github.com/AndriiPerehinets/TgBOT/internal/cli"
 
 	"github.com/joho/godotenv"
 )
@@ -13,13 +16,24 @@ import (
 func main() {
 	Token := getToken()
 
-	start.Start(Token)
+	run(Token)
 
 	stop := make(chan os.Signal, 1)
 
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
 	<-stop
+}
+
+func run(Token string) {
+	bot := bot.NewBot(Token)
+
+	go cli.RunCMD(bot)
+
+	go bot.Fetch()
+
+	ctx, _ := context.WithCancel(context.Background())
+	go bot.DeleteOldMessages(ctx)
 }
 
 func getToken() string {

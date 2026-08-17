@@ -1,4 +1,4 @@
-package start
+package cli
 
 import (
 	"bufio"
@@ -7,8 +7,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sv/bot"
-	"sv/types"
+
+	"github.com/AndriiPerehinets/TgBOT/internal/bot"
+	"github.com/AndriiPerehinets/TgBOT/internal/telegram"
 )
 
 func RunCMD(bot *bot.Bot) {
@@ -43,27 +44,27 @@ func RunCMD(bot *bot.Bot) {
 	}
 }
 
-var CommandBuilder = map[string]func() types.InputStruct{
-	"sendmessage": func() types.InputStruct {
-		return &types.SendText{
+var CommandBuilder = map[string]func() telegram.InputStruct{
+	"sendmessage": func() telegram.InputStruct {
+		return &telegram.SendText{
 			Chat_ID: readInputInt64("Type in ChatID"),
 			Text:    readInput("Type in Text"),
 		}
 	},
-	"sendsticker": func() types.InputStruct {
-		return &types.SendSticker{
+	"sendsticker": func() telegram.InputStruct {
+		return &telegram.SendSticker{
 			Chat_ID:       readInputInt64("Type in ChatID"),
 			StickerFileID: readInput("Type in StickerFileID"),
 		}
 	},
-	"deletemessage": func() types.InputStruct {
-		return &types.DeleteMessage{
+	"deletemessage": func() telegram.InputStruct {
+		return &telegram.DeleteMessage{
 			Chat_ID:   readInputInt64("Type in ChatID"),
 			MessageID: readInputInt64("Type in MessageID (if you are using DeleteLastMessage method just type in anything or press Enter)"),
 		}
 	},
-	"deletelastmessage": func() types.InputStruct {
-		return &types.DeleteMessage{
+	"deletelastmessage": func() telegram.InputStruct {
+		return &telegram.DeleteMessage{
 			Chat_ID:   readInputInt64("Type in ChatID"),
 			MessageID: readInputInt64("Type in MessageID (if you are using DeleteLastMessage method just type in anything or press Enter)"),
 		}

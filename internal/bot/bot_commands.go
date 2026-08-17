@@ -5,19 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sv/bot/utils"
-	"sv/types"
+
+	"github.com/AndriiPerehinets/TgBOT/internal/telegram"
+	"github.com/AndriiPerehinets/TgBOT/internal/utils"
 )
 
-func (b *Bot) isCommand(Message *types.Message) (commad func() error, ok bool) {
-	var CommandList = map[string]func() error{
-		"add_trigger":    func() error { return b.addExpectedTrigger(Message) },
-		"delete_trigger": func() error { return b.addExpectedDeleteTrigger(Message) },
-		"chat_triggers":  func() error { return b.getChatTriggers(Message) },
-		"my_triggers":    func() error { return b.getPersonTriggers(Message) },
-		// start, getmytriggers, get all cards, get my cards, deletealltriggers
-	}
+var CommandList = map[string]func(*Bot, *telegram.Message) error{
+	"add_trigger":    (*Bot).addExpectedTrigger,
+	"delete_trigger": (*Bot).addExpectedDeleteTrigger,
+	"chat_triggers":  (*Bot).getChatTriggers,
+	"my_triggers":    (*Bot).getPersonTriggers,
+	"start":          (*Bot).startCommand,
+	// start, getmytriggers, get all cards, get my cards, deletealltriggers
+}
 
+func (b *Bot) isCommand(Message *telegram.Message) (commad func(*Bot, *telegram.Message) error, ok bool) {
 	txt := strings.Split(strings.TrimPrefix(strings.TrimSpace(strings.ToLower(Message.Text)), "/"), "@")[0]
 	c, ok := CommandList[txt]
 	if !ok {
@@ -27,8 +29,8 @@ func (b *Bot) isCommand(Message *types.Message) (commad func() error, ok bool) {
 	return c, ok
 }
 
-func (b *Bot) sendText(message *types.Message, text string) error {
-	txt := &types.SendText{
+func (b *Bot) sendText(message *telegram.Message, text string) error {
+	txt := &telegram.SendText{
 		Chat_ID: message.Chat.ID,
 		Text:    text,
 	}
@@ -45,8 +47,8 @@ func (b *Bot) sendText(message *types.Message, text string) error {
 	return nil
 }
 
-func (b *Bot) sendSticker(message *types.Message, StickerFileID string) error {
-	stic := &types.SendSticker{
+func (b *Bot) sendSticker(message *telegram.Message, StickerFileID string) error {
+	stic := &telegram.SendSticker{
 		Chat_ID:       message.Chat.ID,
 		StickerFileID: StickerFileID,
 	}
@@ -64,7 +66,7 @@ func (b *Bot) sendSticker(message *types.Message, StickerFileID string) error {
 	return nil
 }
 
-func (b *Bot) sendStruct(command string, param types.InputStruct) error {
+func (b *Bot) sendStruct(command string, param telegram.InputStruct) error {
 	mes, err := b.Client.Send(command, param)
 	if err != nil {
 		return fmt.Errorf("Can't send struct: %#v, %w", param, err)
@@ -78,7 +80,7 @@ func (b *Bot) sendStruct(command string, param types.InputStruct) error {
 	return nil
 }
 
-func (b *Bot) deleteMessage(param *types.DeleteMessage) error {
+func (b *Bot) deleteMessage(param *telegram.DeleteMessage) error {
 	err := b.Client.DeleteMessage(param)
 	if err != nil {
 		return fmt.Errorf("Can't delete message: %#v, %w", param, err)
@@ -106,7 +108,24 @@ func (b *Bot) deleteLastBotsMessage(chatID int64) error {
 	return nil
 }
 
-func (b *Bot) addExpectedTrigger(message *types.Message) error {
+func (b *Bot) startCommand(message *telegram.Message) error {
+	txt := `❇️❇️❇️  Hello! I am LoterViseBot. Here is what I can do for you:
+
+	        🃏 Play a fun card game
+
+	        💬 Set up custom auto-reply triggers using my commands
+
+    There are plenty more features planned for the future, so stay tuned 🙂😉🤩!!!`
+
+	err := b.sendText(message, txt)
+	if err != nil {
+		return fmt.Errorf("Can't execute Start command %w", err)
+	}
+
+	return nil
+}
+
+func (b *Bot) addExpectedTrigger(message *telegram.Message) error {
 	err := b.sendText(message, "Type in trigger phrase")
 	if err != nil {
 		return fmt.Errorf("Can't execute AddExpectedTrigger %w", err)
@@ -120,7 +139,7 @@ func (b *Bot) addExpectedTrigger(message *types.Message) error {
 	return nil
 }
 
-func (b *Bot) addTrigger(message *types.Message) error {
+func (b *Bot) addTrigger(message *telegram.Message) error {
 	err := b.verifyType(message)
 	if err != nil {
 		err := errors.Join(err, b.Storage.DeleteExpectedMessage(message))
@@ -146,7 +165,7 @@ func (b *Bot) addTrigger(message *types.Message) error {
 	return nil
 }
 
-func (b *Bot) addTriggerResp(message *types.Message) error {
+func (b *Bot) addTriggerResp(message *telegram.Message) error {
 	err := b.verifyType(message)
 	if err != nil {
 		err = errors.Join(err, b.Storage.DeleteTrigger(message, false), b.Storage.DeleteExpectedMessage(message))
@@ -167,7 +186,7 @@ func (b *Bot) addTriggerResp(message *types.Message) error {
 	return nil
 }
 
-func (b *Bot) addExpectedDeleteTrigger(message *types.Message) error {
+func (b *Bot) addExpectedDeleteTrigger(message *telegram.Message) error {
 	err := b.sendText(message, "Type in the trigger that you want to delete")
 	if err != nil {
 		return fmt.Errorf("Can't execute AddExpectedDeleteTrigger, %w", err)
@@ -181,7 +200,7 @@ func (b *Bot) addExpectedDeleteTrigger(message *types.Message) error {
 	return nil
 }
 
-func (b *Bot) deleteTrigger(message *types.Message) error {
+func (b *Bot) deleteTrigger(message *telegram.Message) error {
 	err := b.verifyType(message)
 	if err != nil {
 		return fmt.Errorf("Can't delete trigger: %w", err)
@@ -211,7 +230,7 @@ func (b *Bot) deleteTrigger(message *types.Message) error {
 	return nil
 }
 
-func (b *Bot) getChatTriggers(message *types.Message) error {
+func (b *Bot) getChatTriggers(message *telegram.Message) error {
 	resp, err := b.Storage.GetChatTriggers(message)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -228,7 +247,7 @@ func (b *Bot) getChatTriggers(message *types.Message) error {
 	return nil
 }
 
-func (b *Bot) getPersonTriggers(message *types.Message) error {
+func (b *Bot) getPersonTriggers(message *telegram.Message) error {
 	resp, err := b.Storage.GetPersonTriggers(message)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -245,7 +264,7 @@ func (b *Bot) getPersonTriggers(message *types.Message) error {
 	return nil
 }
 
-func (b *Bot) verifyType(message *types.Message) error {
+func (b *Bot) verifyType(message *telegram.Message) error {
 	if _, ok := b.isCommand(message); ok {
 		err := errors.Join(b.sendText(message, "You can't use this message because it is one of the bot commands, if you still want to create a trigger use command again"), utils.ErrUserNotified)
 		return fmt.Errorf("User send message of invalid type: %w", err)

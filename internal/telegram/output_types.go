@@ -1,4 +1,4 @@
-package types
+package telegram
 
 type GetMeResponse struct {
 	Ok     bool `json:"ok"`

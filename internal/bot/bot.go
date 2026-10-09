@@ -23,12 +23,12 @@ type Bot struct {
 	Storage  *storage.Storage
 }
 
-func NewBot(Token string) *Bot {
+func NewBot(botToken, dbPassword string) *Bot {
 	bot := &Bot{
-		Client: client.NewClient(Token),
+		Client: client.NewClient(botToken),
 		Logger: log.New(os.Stdout, "Bot log:\t", log.Lshortfile|log.LstdFlags),
 		Storage: func() *storage.Storage {
-			storage := storage.NewStorage(storage.SetUpStorage())
+			storage := storage.NewStorage(storage.SetUpStorage(dbPassword))
 			return storage
 		}(),
 	}
@@ -50,35 +50,41 @@ func NewBot(Token string) *Bot {
 	return bot
 }
 
-func (b *Bot) Fetch() {
+func (b *Bot) Fetch(ctx context.Context, maxGoroutines int) {
 	var offset int64
+	pool := NewPool(b, maxGoroutines, 20)
+	pool.CreateWorkerPool(ctx, maxGoroutines)
 
 	for {
-		updates, err := b.Client.GetUpdate(offset)
-		if err != nil {
-			b.Logger.Println("An error occurred during b.Client.GetUpdate: ", err)
-			continue
-		}
-		// ch := make(chan types.Update, 1000)
-		for _, u := range updates {
-			if u.Message.MessageID == 0 {
-				continue
-			} else if u.UpdateID >= offset {
-				offset = u.UpdateID + 1
+		select {
+		case <-ctx.Done():
+			for _, ch := range pool.taskChan {
+				close(ch)
 			}
+			pool.wg.Wait()
+			b.Logger.Println("All workers successfully stopped")
+			return
 
-			b.Logger.Printf("Response data:\t %#v\n\n", u)
-			// go process.CreateWorkerPool(50, ch)
-
-			err = b.fetchMessage(&u.Message)
+		default:
+			updates, err := b.Client.GetUpdate(offset)
 			if err != nil {
-				if !errors.Is(err, utils.ErrUserNotified) {
-					err = errors.Join(err, b.sendText(&u.Message, "Sorry, an error occured"))
-				}
-				b.Logger.Println(err)
+				b.Logger.Println("An error occurred during b.Client.GetUpdate: ", err)
 				continue
 			}
-			continue
+
+			for _, u := range updates {
+				if u.Message.MessageID == 0 {
+					continue
+				} else if u.UpdateID >= offset {
+					offset = u.UpdateID + 1
+				}
+
+				chanIndex := u.Message.Chat.ID % int64(maxGoroutines)
+				if chanIndex < 0 {
+					chanIndex = -chanIndex
+				}
+				pool.taskChan[chanIndex] <- u
+			}
 		}
 	}
 }
@@ -143,7 +149,7 @@ func (b *Bot) fetchMessage(message *telegram.Message) error {
 		return fmt.Errorf("Can't insert message: %w", err)
 	}
 
-	err, ok := b.expectedHandle(message)
+	ok, err := b.expectedHandle(message)
 	if err != nil {
 		return err
 	} else if ok {
@@ -160,7 +166,7 @@ func (b *Bot) fetchMessage(message *telegram.Message) error {
 		return nil
 	}
 
-	err, ok = b.triggerHandle(message)
+	ok, err = b.triggerHandle(message)
 	if err != nil {
 		return err
 	} else if ok {
@@ -170,43 +176,43 @@ func (b *Bot) fetchMessage(message *telegram.Message) error {
 	return nil
 }
 
-func (b *Bot) triggerHandle(message *telegram.Message) (error, bool) {
+func (b *Bot) triggerHandle(message *telegram.Message) (bool, error) {
 	message.Text = strings.ToLower(strings.TrimSpace(message.Text))
 	IsTrigger, err := b.Storage.IsTrigger(message)
 	if err != nil {
-		return fmt.Errorf("Error during message handling %w", err), false
+		return false, fmt.Errorf("Error during message handling %w", err)
 	}
 	if IsTrigger {
 		b.Logger.Printf("Message is trigger\n")
 
 		TriggerResp, RespType, err := b.Storage.GetTriggerResp(message)
 		if err != nil {
-			return fmt.Errorf("Error during Trigger execution: %w", err), false
+			return false, fmt.Errorf("Error during Trigger execution: %w", err)
 		}
 
 		if RespType == "Sticker" {
 			err := b.sendSticker(message, TriggerResp)
 			if err != nil {
-				return fmt.Errorf("Can't send response to the trigger: %w", err), false
+				return false, fmt.Errorf("Can't send response to the trigger: %w", err)
 			}
 			b.Logger.Println("Bot responded to the trigger")
-			return nil, true
+			return true, nil
 		}
 
 		err = b.sendText(message, TriggerResp)
 		if err != nil {
-			return fmt.Errorf("Can't send responce to the trigger: %w", err), false
+			return false, fmt.Errorf("Can't send responce to the trigger: %w", err)
 		}
 		b.Logger.Println("Bot responded to the trigger")
-		return nil, true
+		return true, nil
 	}
-	return nil, false
+	return false, nil
 }
 
-func (b *Bot) expectedHandle(message *telegram.Message) (err error, done bool) {
+func (b *Bot) expectedHandle(message *telegram.Message) (done bool, err error) {
 	expected, err := b.Storage.IsExpected(message)
 	if err != nil {
-		return fmt.Errorf("Error during message handling: %w", err), false
+		return false, fmt.Errorf("Error during message handling: %w", err)
 	}
 
 	if expected {
@@ -214,31 +220,31 @@ func (b *Bot) expectedHandle(message *telegram.Message) (err error, done bool) {
 		State, err := b.Storage.GetExpectedMessageState(message)
 		if err != nil {
 			err = errors.Join(err, b.Storage.DeleteExpectedMessage(message))
-			return fmt.Errorf("Error during message handling: %w", err), false
+			return false, fmt.Errorf("Error during message handling: %w", err)
 		}
 
 		switch State {
 		case "Trigger":
 			err = b.addTrigger(message)
 			if err != nil {
-				return err, false
+				return false, err
 			}
-			return nil, true
+			return true, nil
 
 		case "TriggerResp":
 			err = b.addTriggerResp(message)
 			if err != nil {
-				return err, false
+				return false, err
 			}
-			return nil, true
+			return true, nil
 
 		case "TriggerName":
 			err = b.deleteTrigger(message)
 			if err != nil {
-				return err, false
+				return false, err
 			}
-			return nil, true
+			return true, nil
 		}
 	}
-	return nil, false
+	return false, nil
 }

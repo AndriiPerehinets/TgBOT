@@ -22,6 +22,10 @@ type Storage struct {
 	logger *log.Logger
 }
 
+type Connection interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
 func NewStorage(db *sql.DB) *Storage {
 	return &Storage{
 		db:     db,
@@ -29,13 +33,8 @@ func NewStorage(db *sql.DB) *Storage {
 	}
 }
 
-func SetUpStorage() *sql.DB {
-	password := os.Getenv("POSTGRES_PASSWORD")
-	if password == "" {
-		logger.Fatal("POSTGRES_PASSWORD is uninitialized inside .env file")
-	}
-
-	dsn := "postgres://postgres:" + password + "@localhost:5432/postgres"
+func SetUpStorage(dbPassword string) *sql.DB {
+	dsn := "postgres://postgres:" + dbPassword + "@localhost:5432/postgres"
 
 	postgres_db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -51,7 +50,7 @@ func SetUpStorage() *sql.DB {
 
 	_, err = postgres_db.Exec("SELECT 1 FROM pg_database WHERE datname = 'telegram_bot'")
 	if err == nil {
-		logger.Println("Data dase Telegram_Bot already exists")
+		logger.Println("Data base Telegram_Bot already exists")
 	} else {
 		_, err = postgres_db.Exec("CREATE DATABASE Telegram_Bot")
 		if err != nil {
@@ -63,7 +62,7 @@ func SetUpStorage() *sql.DB {
 
 	postgres_db.Close()
 
-	newDSN := "postgres://postgres:" + password + "@localhost:5432/telegram_bot"
+	newDSN := "postgres://postgres:" + dbPassword + "@localhost:5432/telegram_bot"
 
 	db, err := sql.Open("pgx", newDSN)
 	if err != nil {
@@ -87,7 +86,7 @@ func SetUpStorage() *sql.DB {
 
 	_, err = db.Exec(query)
 	if err != nil {
-		logger.Fatal("Error dutring creation of CHATS table: ", err)
+		logger.Fatal("Error during creation of CHATS table: ", err)
 	} else {
 		logger.Println("Table CHATS table successfully created")
 	}
@@ -170,24 +169,13 @@ func SetUpStorage() *sql.DB {
 }
 
 func (S *Storage) InsertChat(chat *telegram.Chat) error {
-	var exists bool
-	row := S.db.QueryRow("SELECT EXISTS(SELECT 1 FROM CHATS WHERE chatid = $1)", chat.ID)
-	err := row.Scan(&exists)
-	if err != nil {
-		return fmt.Errorf("Error during checking chat existence: %w", err)
-	}
-
-	if exists {
-		return nil
-	}
-
-	S.logger.Println("New Chat was created")
 	query := `
 		INSERT INTO CHATS (chatid, username, type)
 		VALUES($1, $2, $3)
+		ON CONFLICT (ChatID) DO NOTHING
 	`
 
-	_, err = S.db.Exec(query, chat.ID, chat.Username, chat.Type)
+	_, err := S.db.Exec(query, chat.ID, chat.Username, chat.Type)
 	if err != nil {
 		return fmt.Errorf("Error during chat insertion: %w", err)
 	}
@@ -196,22 +184,13 @@ func (S *Storage) InsertChat(chat *telegram.Chat) error {
 }
 
 func (S *Storage) InsertSticker(sticker *telegram.Sticker) error {
-	var exists bool
-	err := S.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM STICKERS WHERE FileUniqueID = $1)`, sticker.FileUniqueID).Scan(&exists)
-	if err != nil {
-		return fmt.Errorf("Error during checking sticker existence: %w", err)
-	}
-
-	if exists {
-		return nil
-	}
-
 	query := `
 		INSERT INTO STICKERS (FileUniqueID, FileID, Emoji, SetName)
 		VALUES($1, $2, $3, $4)
+		ON CONFLICT (FileUniqueID) DO NOTHING
 	`
 
-	_, err = S.db.Exec(query, sticker.FileUniqueID, sticker.FileID, sticker.Emoji, sticker.SetName)
+	_, err := S.db.Exec(query, sticker.FileUniqueID, sticker.FileID, sticker.Emoji, sticker.SetName)
 	if err != nil {
 		return fmt.Errorf("Error during inserting new sticker: %w", err)
 	}
@@ -268,11 +247,9 @@ func (S *Storage) SelectLastMessage(chatID, botID int64) (*telegram.DeleteMessag
 		LIMIT 1
 	`
 
-	row := S.db.QueryRow(query, chatID, botID)
-
 	var MessageID, ChatID int64
 
-	err := row.Scan(&MessageID, &ChatID)
+	err := S.db.QueryRow(query, chatID, botID).Scan(&MessageID, &ChatID)
 
 	if err != nil {
 		return nil, fmt.Errorf("Error during searching for last message: %w", err)
@@ -331,42 +308,60 @@ func (S *Storage) IsExpected(message *telegram.Message) (bool, error) {
 	return exists, nil
 }
 
-func (S *Storage) DeleteExpectedMessage(message *telegram.Message) error {
+func (S *Storage) deleteExpectedMessageCore(con Connection, message *telegram.Message) error {
 	query := `
 		DELETE FROM EXPECTED_MESSAGES WHERE ChatID = $1 AND UserID = $2
 	`
 
-	resp, err := S.db.Exec(query, message.Chat.ID, message.From.UserID)
+	resp, err := con.Exec(query, message.Chat.ID, message.From.UserID)
 	if err != nil {
 		return fmt.Errorf("Can't delete message from EXPECTED_MESSAGE table: %w", err)
 	}
 
 	affected, err := resp.RowsAffected()
-	if affected != 1 {
-		return fmt.Errorf("There is no such expected message")
+	if err != nil {
+		return fmt.Errorf("Can't get RowsAffected number: %w", err)
 	}
 
-	if err != nil {
-		return fmt.Errorf("Can'delete trigger: %w", err)
+	if affected != 1 {
+		return fmt.Errorf("There is no such expected message")
 	}
 
 	return nil
 }
 
-func (S *Storage) InsertTrigger(message *telegram.Message) error {
+func (S *Storage) DeleteExpectedMessage(message *telegram.Message) error {
+	return S.deleteExpectedMessageCore(S.db, message)
+}
+
+func (S *Storage) DeleteExpectedMessageTX(tx *sql.Tx, message *telegram.Message) error {
+	return S.deleteExpectedMessageCore(tx, message)
+}
+
+func (S *Storage) InsertTrigger(message *telegram.Message) (err error) {
 	query := `
 		INSERT INTO TRIGGERS (ChatID, UserID, Username, TriggerType, Trigger)
 		VALUES($1, $2, $3, $4, $5) 
 		ON CONFLICT (ChatID, Trigger) DO NOTHING
-		RETURNING 1
 	`
 	var Trigger, TriggerType string
 
+	tx, err := S.db.Begin()
+	if err != nil {
+		return fmt.Errorf("Can't insert trigger. Can't create transaction %w", err)
+	}
+	defer func() {
+		tx.Rollback()
+		if err != nil {
+			err = errors.Join(err, S.DeleteExpectedMessage(message))
+		}
+	}()
+
 	if !(message.Sticker.FileUniqueID == "") {
 		TriggerType = "Sticker"
-		err := S.InsertSticker(&message.Sticker)
+		err = S.InsertSticker(&message.Sticker)
 		if err != nil {
-			return fmt.Errorf("Can't insert trigger: %w", errors.Join(err, S.DeleteExpectedMessage(message)))
+			return fmt.Errorf("Can't insert trigger: %w", err)
 		}
 		Trigger = message.Sticker.FileUniqueID
 	} else {
@@ -374,15 +369,14 @@ func (S *Storage) InsertTrigger(message *telegram.Message) error {
 		Trigger = strings.TrimSpace(message.Text)
 	}
 
-	var i int
-	err := S.db.QueryRow(query, message.Chat.ID, message.From.UserID, message.From.Username,
-		TriggerType, Trigger).Scan(&i)
+	res, err := tx.Exec(query, message.Chat.ID, message.From.UserID, message.From.Username,
+		TriggerType, Trigger)
 
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return errors.Join(err, S.DeleteExpectedMessage(message), utils.ErrTriggerExists)
-		}
-		return errors.Join(fmt.Errorf("Can't insert trigger: %w", err), S.DeleteTrigger(message, false))
+		return fmt.Errorf("Can't insert trigger: %w", err)
+	}
+	if i, _ := res.RowsAffected(); i == 0 {
+		return errors.Join(err, utils.ErrTriggerExists)
 	}
 
 	query = `
@@ -392,23 +386,38 @@ func (S *Storage) InsertTrigger(message *telegram.Message) error {
 		WHERE ChatID = $1 AND UserID = $2
 	`
 
-	_, err = S.db.Exec(query, message.Chat.ID, message.From.UserID)
+	_, err = tx.Exec(query, message.Chat.ID, message.From.UserID)
 	if err != nil {
-		err = errors.Join(err, S.DeleteExpectedMessage(message), S.DeleteTrigger(message, false))
 		return fmt.Errorf("Can't change expected message status to IsTriggerResponse %w", err)
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("Can't commit transaction during InsertTrigger %w", err)
 	}
 
 	return nil
 }
 
-func (S *Storage) AddTriggerResponse(message *telegram.Message) error {
+func (S *Storage) AddTriggerResponse(message *telegram.Message) (err error) {
 	var TriggerResp, RespType string
 
+	tx, err := S.db.Begin()
+	if err != nil {
+		return fmt.Errorf("Can't add trigger response %w", err)
+	}
+
+	defer func() {
+		tx.Rollback()
+		if err != nil {
+			err = errors.Join(err, S.DeleteExpectedMessage(message), S.DeleteTrigger(message, false))
+		}
+	}()
 	if !(message.Sticker.FileUniqueID == "") {
 		RespType = "Sticker"
-		err := S.InsertSticker(&message.Sticker)
+		err = S.InsertSticker(&message.Sticker)
 		if err != nil {
-			return fmt.Errorf("Can't insert trigger: %w", errors.Join(err, S.DeleteExpectedMessage(message), S.DeleteTrigger(message, false)))
+			return fmt.Errorf("Can't insert trigger: %w", err)
 		}
 		TriggerResp = message.Sticker.FileUniqueID
 	} else {
@@ -423,19 +432,20 @@ func (S *Storage) AddTriggerResponse(message *telegram.Message) error {
 		WHERE ChatID = $3 AND UserID = $4 AND TriggerResp IS NULL
 	`
 
-	_, err := S.db.Exec(query, TriggerResp, RespType, message.Chat.ID, message.From.UserID)
+	_, err = tx.Exec(query, TriggerResp, RespType, message.Chat.ID, message.From.UserID)
 	if err != nil {
-		err = errors.Join(err, S.DeleteExpectedMessage(message), S.DeleteTrigger(message, false))
-
 		return fmt.Errorf("Can't add trigger reponse %w", err)
 	}
 
-	err = S.DeleteExpectedMessage(message)
+	err = S.DeleteExpectedMessageTX(tx, message)
 	if err != nil {
-		err := errors.Join(err, S.DeleteTrigger(message, false))
 		return fmt.Errorf("Error during adding trigger response: %w", err)
 	}
 
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("Can't commit transaction %w", err)
+	}
 	return nil
 }
 
@@ -513,11 +523,11 @@ func (S *Storage) GetPersonTriggers(message *telegram.Message) (string, error) {
 		}
 
 		if Emoji == nil {
-			utils.TrancateText(Trigger, 35)
+			Trigger = utils.TrancateText(Trigger, 35)
 			result += fmt.Sprintf("Trigger: %s\n", Trigger)
 		} else {
-			utils.TrancateText(*SetName, 30)
-			result += fmt.Sprintf("Trigger: %s From[: %s]\n", *Emoji, *SetName)
+			*SetName = utils.TrancateText(*SetName, 30)
+			result += fmt.Sprintf("Trigger: %s [From: %s]\n", *Emoji, *SetName)
 		}
 
 	}
@@ -571,23 +581,47 @@ func (S *Storage) GetTriggerResp(message *telegram.Message) (Resp string, RespTy
 
 func (S *Storage) DeleteTrigger(message *telegram.Message, IsAdmin bool) error {
 	query := `
-		DELETE FROM TRIGGERS WHERE ChatID = $1 AND (Trigger = $2 OR TriggerResp IS NULL) AND (UserID = $3 OR $4)
+		DELETE FROM TRIGGERS WHERE ChatID = $1 AND Trigger = $2 AND (UserID = $3 OR $4)
 	`
 
 	resp, err := S.db.Exec(query, message.Chat.ID, strings.TrimSpace(message.Text+message.Sticker.FileUniqueID),
 		message.From.UserID, IsAdmin)
 
 	if err != nil {
-		return fmt.Errorf("Can' delete trigger: %w", err)
+		return fmt.Errorf("Can' DeleteTrigger: %w", err)
 	}
 
 	affected, err := resp.RowsAffected()
-	if affected != 1 {
-		return fmt.Errorf("Can't delete trigger: %w or you don't have the permission to delete this trigger", utils.ErrTriggerDontExists)
+	if err != nil {
+		return fmt.Errorf("Can't DeleteTrigger: %w", err)
 	}
 
+	if affected != 1 {
+		return fmt.Errorf("Can't DeleteTrigger: %w or you don't have the permission to delete this trigger", utils.ErrTriggerDontExists)
+	}
+
+	S.logger.Println("Trigger was successfully deleted")
+
+	return nil
+}
+
+func (S *Storage) DeleteUnfinishedTrigger(message *telegram.Message) error {
+	query := `
+		DELETE FROM TRIGGERS WHERE ChatID = $1 AND TriggerResp IS NULL AND UserID = $2
+	`
+
+	resp, err := S.db.Exec(query, message.Chat.ID, message.From.UserID)
 	if err != nil {
-		return fmt.Errorf("Can't delete trigger: %w", err)
+		return fmt.Errorf("Can't DeleteUnfinishedTrigger: %w", err)
+	}
+
+	affected, err := resp.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("Can't DeleteUnfinishedTrigger: %w", err)
+	}
+
+	if affected != 1 {
+		return fmt.Errorf("Can't DeleteUnfinishedTrigger: %w or you don't have the permission to delete this trigger", utils.ErrTriggerDontExists)
 	}
 
 	S.logger.Println("Trigger was successfully deleted")
@@ -597,11 +631,8 @@ func (S *Storage) DeleteTrigger(message *telegram.Message, IsAdmin bool) error {
 
 func (S *Storage) DeleteOldMessages() error {
 	query := `
-	DELETE FROM MESSAGES 
-	WHERE CreatedON < NOW() - INTERVAL '3 months';
-
-	DELETE FROM EXPECTED_MESSAGES 
-	WHERE CreatedON < NOW() - INTERVAL '1 day';
+		DELETE FROM MESSAGES 
+		WHERE CreatedON < NOW() - INTERVAL '3 months'
 	`
 
 	affected, err := S.db.Exec(query)
@@ -609,8 +640,22 @@ func (S *Storage) DeleteOldMessages() error {
 		return fmt.Errorf("Can't delete old messages: %w", err)
 	}
 
-	if i, _ := affected.RowsAffected(); i != 0 {
-		S.logger.Printf("During DeleteOldMessages %d messages was deleted\n", i)
+	globalAffected, _ := affected.RowsAffected()
+
+	query = `
+		DELETE FROM EXPECTED_MESSAGES 
+		WHERE CreatedON < NOW() - INTERVAL '1 day'
+	`
+	affected, err = S.db.Exec(query)
+	if err != nil {
+		return fmt.Errorf("Can't delete old EXPECTED_MESSAGES: %w", err)
+	}
+
+	temp, _ := affected.RowsAffected()
+
+	globalAffected += temp
+	if globalAffected != 0 {
+		S.logger.Printf("During DeleteOldMessages %d messages was deleted\n", globalAffected)
 	}
 
 	return nil

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -12,34 +13,51 @@ import (
 	"github.com/AndriiPerehinets/TgBOT/internal/telegram"
 )
 
-func RunCMD(bot *bot.Bot) {
-
-	buf := bufio.NewReader(os.Stdin)
-
+func RunCMD(ctx context.Context, bot *bot.Bot) {
 	logger := log.New(os.Stdout, "RunCMD func Log:\t", log.LstdFlags|log.Llongfile)
 
+	inputChan := make(chan string)
+
+	go func() {
+		defer close(inputChan)
+		for {
+			buf := bufio.NewReader(os.Stdin)
+
+			command, err := buf.ReadString('\n')
+
+			if err != nil {
+				logger.Println(fmt.Errorf("Can't read the input from Stdin %w", err))
+			}
+
+			select {
+			case inputChan <- command:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	for {
-		command, err := buf.ReadString('\n')
-		if err != nil {
-			logger.Println(fmt.Errorf("Can't read the input from Stdin %w", err))
-		}
+		select {
+		case <-ctx.Done():
+			return
 
-		command = strings.TrimSpace(strings.ToLower(command))
-		if command == "end" {
-			logger.Fatal("Program ended due to end command execution")
-		}
+		case command := <-inputChan:
 
-		com, exist := CommandBuilder[command]
-		if exist == false {
-			logger.Println("Invalid command")
-			continue
-		}
+			command = strings.TrimSpace(strings.ToLower(command))
 
-		param := com()
+			com, exist := CommandBuilder[command]
+			if exist == false {
+				logger.Println("Invalid command")
+				continue
+			}
 
-		err = bot.DoCMDCommand(command, param)
-		if err != nil {
-			logger.Println(fmt.Errorf("During %s execution occurred an error: %w", command, err))
+			param := com()
+
+			err := bot.DoCMDCommand(command, param)
+			if err != nil {
+				logger.Println(fmt.Errorf("During %s execution occurred an error: %w", command, err))
+			}
 		}
 	}
 }

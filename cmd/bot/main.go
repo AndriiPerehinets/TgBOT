@@ -5,6 +5,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
+	"sync"
 	"syscall"
 
 	"github.com/AndriiPerehinets/TgBOT/internal/bot"
@@ -14,29 +16,39 @@ import (
 )
 
 func main() {
-	Token := getToken()
-
-	run(Token)
-
-	stop := make(chan os.Signal, 1)
-
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-
-	<-stop
-}
-
-func run(Token string) {
-	bot := bot.NewBot(Token)
-
-	go cli.RunCMD(bot)
-
-	go bot.Fetch()
+	botToken, dbPassword, maxGoroutines := getEnv()
 
 	ctx, _ := context.WithCancel(context.Background())
-	go bot.DeleteOldMessages(ctx)
+
+	ctx, _ = signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+
+	run(ctx, botToken, dbPassword, maxGoroutines)
 }
 
-func getToken() string {
+func run(ctx context.Context, botToken, dbPassword string, maxGoroutines int) {
+	var wg sync.WaitGroup
+	bot := bot.NewBot(botToken, dbPassword)
+
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		cli.RunCMD(ctx, bot)
+	}()
+
+	go func() {
+		defer wg.Done()
+		bot.Fetch(ctx, maxGoroutines)
+	}()
+
+	go func() {
+		defer wg.Done()
+		bot.DeleteOldMessages(ctx)
+	}()
+
+	wg.Wait()
+}
+
+func getEnv() (botToken, dbPassword string, maxGoroutines int) {
 	logger := log.New(os.Stdout, "Main Log:\t", log.LstdFlags|log.Llongfile)
 
 	err := godotenv.Load()
@@ -44,10 +56,23 @@ func getToken() string {
 		logger.Fatalln("Can't find file .env, ", err)
 	}
 
-	botToken := os.Getenv("TG_BOT_TOKEN")
+	botToken = os.Getenv("TG_BOT_TOKEN")
 	if botToken == "" {
 		logger.Fatalln("TG_BOT_TOKEN is uninitialized inside .env file")
 	}
 
-	return botToken
+	dbPassword = os.Getenv("POSTGRES_PASSWORD")
+	if dbPassword == "" {
+		logger.Fatalln("POSTGRES_PASSWORD is uninitialized inside .env file")
+	}
+
+	maxG := os.Getenv("MAX_GOROUTINES")
+	if maxG == "" {
+		logger.Fatalln("MAX_GOROUTINES is uninitialized inside .env file")
+	}
+	if maxGoroutines, err = strconv.Atoi(maxG); err != nil {
+		logger.Fatalln("Can't parse maxGoroutines to int type, maxGoroutines must be a number %w", err)
+	}
+
+	return botToken, dbPassword, maxGoroutines
 }

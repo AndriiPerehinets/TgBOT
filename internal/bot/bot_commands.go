@@ -16,7 +16,6 @@ var CommandList = map[string]func(*Bot, *telegram.Message) error{
 	"chat_triggers":  (*Bot).getChatTriggers,
 	"my_triggers":    (*Bot).getPersonTriggers,
 	"start":          (*Bot).startCommand,
-	// start, getmytriggers, get all cards, get my cards, deletealltriggers
 }
 
 func (b *Bot) isCommand(Message *telegram.Message) (commad func(*Bot, *telegram.Message) error, ok bool) {
@@ -158,7 +157,7 @@ func (b *Bot) addTrigger(message *telegram.Message) error {
 
 	err = b.sendText(message, "Now send a response to the trigger")
 	if err != nil {
-		err = errors.Join(err, b.Storage.DeleteTrigger(message, false), b.Storage.DeleteExpectedMessage(message))
+		err = errors.Join(err, b.Storage.DeleteUnfinishedTrigger(message), b.Storage.DeleteExpectedMessage(message))
 
 		return fmt.Errorf("Can't add trigger. Error during message handling: %w", err)
 	}
@@ -168,13 +167,13 @@ func (b *Bot) addTrigger(message *telegram.Message) error {
 func (b *Bot) addTriggerResp(message *telegram.Message) error {
 	err := b.verifyType(message)
 	if err != nil {
-		err = errors.Join(err, b.Storage.DeleteTrigger(message, false), b.Storage.DeleteExpectedMessage(message))
+		err = errors.Join(err, b.Storage.DeleteUnfinishedTrigger(message), b.Storage.DeleteExpectedMessage(message))
 		return fmt.Errorf("Can't set trigger response. Can't VerifyType of message: %w", err)
 	}
 
 	err = b.Storage.AddTriggerResponse(message)
 	if err != nil {
-		err = errors.Join(err, b.Storage.DeleteTrigger(message, false))
+		err = errors.Join(err, b.Storage.DeleteUnfinishedTrigger(message))
 		return fmt.Errorf("Can't set trigger response. Error during message handling: %w", err)
 	}
 
@@ -206,8 +205,8 @@ func (b *Bot) deleteTrigger(message *telegram.Message) error {
 		return fmt.Errorf("Can't delete trigger: %w", err)
 	}
 
-	err = errors.Join(err, b.Storage.DeleteExpectedMessage(message))
 	IsAdmin, err := b.Client.IsAdministrator(&message.Chat, message.From.UserID)
+	err = errors.Join(err, b.Storage.DeleteExpectedMessage(message))
 	if err != nil {
 		return fmt.Errorf("Can't Delete trigger: %w", err)
 	}

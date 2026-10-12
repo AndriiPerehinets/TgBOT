@@ -53,7 +53,7 @@ func NewBot(botToken, dbPassword string) *Bot {
 func (b *Bot) Fetch(ctx context.Context, maxGoroutines int) {
 	var offset int64
 	pool := NewPool(b, maxGoroutines, 20)
-	pool.CreateWorkerPool(ctx, maxGoroutines)
+	pool.CreateWorkerPool(maxGoroutines)
 
 	for {
 		select {
